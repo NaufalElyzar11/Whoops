@@ -12,11 +12,14 @@ import {
   QrCode,
   Save,
   Search,
+  Tag,
+  Trash2,
   Upload,
 } from 'lucide-react';
 import { formatOrderTime, rupiah } from '../constants/defaults';
 import { auth, googleProvider } from '../firebase';
 import {
+  deletePackage,
   fetchOrderMediaDataUrl,
   markOrderPrinted,
   rejectOrderPayment,
@@ -30,12 +33,19 @@ import {
 } from '../services/firestoreService';
 import type {
   AdminTab,
+  DiscountType,
   PhotoFrame,
   PhotoboothOrder,
   ServicePackage,
   StoreSettings,
+  VoucherCode,
   WorkflowStatus,
 } from '../types';
+import {
+  formatVoucherBenefit,
+  normalizeVoucherCode,
+  voucherToPackage,
+} from '../utils/voucher';
 import { DoodleStudioModal } from './DoodleStudioModal';
 import { FramePreviewCanvas } from './FramePreviewCanvas';
 import { OrderQrModal } from './OrderQrModal';
@@ -44,6 +54,7 @@ interface AdminDashboardProps {
   user: User | null;
   authLoading: boolean;
   packages: ServicePackage[];
+  vouchers: VoucherCode[];
   frames: PhotoFrame[];
   settings: StoreSettings;
 }
@@ -62,6 +73,7 @@ export function AdminDashboard({
   user,
   authLoading,
   packages,
+  vouchers,
   frames,
   settings,
 }: AdminDashboardProps) {
@@ -82,6 +94,12 @@ export function AdminDashboard({
   const [printAddonDraft, setPrintAddonDraft] = useState<number>(settings.printAddonPrice);
   const [qrisLabelDraft, setQrisLabelDraft] = useState<string>(settings.qrisLabel);
   const [pkgDrafts, setPkgDrafts] = useState<Record<string, ServicePackage>>({});
+  const [voucherDrafts, setVoucherDrafts] = useState<Record<string, VoucherCode>>({});
+  const [newVoucherCode, setNewVoucherCode] = useState('');
+  const [newVoucherType, setNewVoucherType] = useState<DiscountType>('fixed');
+  const [newVoucherValue, setNewVoucherValue] = useState<number>(5000);
+  const [newVoucherDesc, setNewVoucherDesc] = useState('');
+  const [confirmDeleteVoucherId, setConfirmDeleteVoucherId] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
 
   // New Frame Form
@@ -110,6 +128,14 @@ export function AdminDashboard({
     });
     setPkgDrafts(map);
   }, [packages]);
+
+  useEffect(() => {
+    const map: Record<string, VoucherCode> = {};
+    vouchers.forEach((v) => {
+      map[v.id] = { ...v };
+    });
+    setVoucherDrafts(map);
+  }, [vouchers]);
 
   useEffect(() => {
     if (!user) {
@@ -198,6 +224,86 @@ export function AdminDashboard({
       showToast(`Paket "${draft.name}" berhasil diperbarui.`);
     } catch {
       showToast(`Gagal memperbarui paket "${draft.name}".`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleCreateVoucher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanCode = normalizeVoucherCode(newVoucherCode);
+    if (!cleanCode) {
+      showToast('Masukkan kode voucher huruf/angka (misal: HEMAT5K).');
+      return;
+    }
+    if (vouchers.some((v) => v.code === cleanCode)) {
+      showToast(`Kode voucher "${cleanCode}" sudah ada.`);
+      return;
+    }
+    const cleanValue = Math.max(0, Math.round(Number(newVoucherValue) || 0));
+    if (cleanValue <= 0) {
+      showToast('Nilai potongan voucher harus lebih dari 0.');
+      return;
+    }
+    if (newVoucherType === 'percent' && cleanValue > 100) {
+      showToast('Persentase diskon maksimal 100%.');
+      return;
+    }
+
+    setSavingId('new-voucher');
+    try {
+      const id = `vch-${Date.now()}`;
+      const voucher: VoucherCode = {
+        id,
+        code: cleanCode,
+        discountType: newVoucherType,
+        discountValue: cleanValue,
+        description: newVoucherDesc.trim(),
+        isActive: true,
+      };
+      await savePackage(voucherToPackage(voucher, 900 + vouchers.length));
+      setNewVoucherCode('');
+      setNewVoucherDesc('');
+      showToast(`Voucher "${cleanCode}" (${formatVoucherBenefit(voucher)}) dibuat.`);
+    } catch {
+      showToast(`Gagal menyimpan voucher "${cleanCode}".`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleSaveVoucher = async (voucherId: string) => {
+    const draft = voucherDrafts[voucherId];
+    if (!draft) return;
+    const cleanCode = normalizeVoucherCode(draft.code);
+    if (!cleanCode) {
+      showToast('Kode voucher tidak boleh kosong.');
+      return;
+    }
+    if (draft.discountType === 'percent' && (draft.discountValue <= 0 || draft.discountValue > 100)) {
+      showToast('Diskon persen harus di antara 1 sampai 100%.');
+      return;
+    }
+    setSavingId(voucherId);
+    try {
+      const normalized = { ...draft, code: cleanCode };
+      await savePackage(voucherToPackage(normalized));
+      showToast(`Voucher "${cleanCode}" diperbarui.`);
+    } catch {
+      showToast(`Gagal memperbarui voucher "${cleanCode}".`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleDeleteVoucher = async (voucher: VoucherCode) => {
+    setSavingId(voucher.id);
+    try {
+      await deletePackage(voucher.id);
+      setConfirmDeleteVoucherId(null);
+      showToast(`Voucher "${voucher.code}" dihapus.`);
+    } catch {
+      showToast(`Gagal menghapus voucher "${voucher.code}".`);
     } finally {
       setSavingId(null);
     }
@@ -311,6 +417,8 @@ export function AdminDashboard({
   });
 
   const pendingCount = orders.filter((o) => o.paymentStatus === 'PENDING_VERIFICATION').length;
+  const latestPendingOrder =
+    orders.find((o) => o.paymentStatus === 'PENDING_VERIFICATION') || null;
   const doodleOrders = orders.filter((o) => o.includesDoodle);
   const printOrders = orders.filter(
     (o) => o.paymentStatus === 'VERIFIED' && o.wantsPrint
@@ -320,7 +428,7 @@ export function AdminDashboard({
     { id: 'orders', label: pendingCount > 0 ? `Orders (${pendingCount})` : 'Orders' },
     { id: 'doodle', label: 'Doodle Queue & Upload' },
     { id: 'print', label: 'Print Queue' },
-    { id: 'packages', label: 'Service & Packages' },
+    { id: 'packages', label: 'Harga, Paket & Voucher' },
     { id: 'frames', label: 'Frames' },
   ];
 
@@ -362,7 +470,79 @@ export function AdminDashboard({
 
       {/* TAB 1: ORDERS */}
       {activeTab === 'orders' && (
-        <div className="whoops-card overflow-hidden">
+        <div className="space-y-4">
+          {/* Single-Booth No-Code Latest Entry Card */}
+          {latestPendingOrder && (
+            <div className="whoops-card p-4 sm:p-5 bg-gradient-to-br from-[#FDF7EE] to-[#F3D2DB]/45 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-4 min-w-0">
+                {latestPendingOrder.previewThumbUrl && (
+                  <div className="w-16 sm:w-20 aspect-[1205/1795] rounded-xl overflow-hidden border-2 border-[#3A231E] bg-white shrink-0 shadow-[2px_2px_0_#3A231E]">
+                    <img
+                      src={latestPendingOrder.previewThumbUrl}
+                      alt={`Foto terbaru ${latestPendingOrder.orderCode}`}
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="px-2.5 py-0.5 rounded-md bg-[#6D1D3A] text-[#FDF7EE] border border-[#3A231E] text-[10px] font-display font-bold uppercase tracking-wide">
+                      Terbaru dari Booth
+                    </span>
+                    <span className="text-xs font-mono-tabular text-[#61433B]">
+                      {formatOrderTime(latestPendingOrder.createdAt)} | Ref {latestPendingOrder.orderCode}
+                    </span>
+                  </div>
+                  <div className="font-display font-bold text-base sm:text-lg text-[#3A231E]">
+                    {latestPendingOrder.packageName}
+                    {latestPendingOrder.wantsPrint ? ' + Cetak 4R' : ''}
+                  </div>
+                  <div className="font-display font-bold text-2xl text-[#6D1D3A] tabular-nums">
+                    {rupiah(latestPendingOrder.totalAmount)}
+                  </div>
+                  {latestPendingOrder.doodleNotes && (
+                    <p className="text-xs text-[#61433B] mt-0.5 truncate">
+                      {latestPendingOrder.doodleNotes}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await verifyOrderPayment(latestPendingOrder);
+                      showToast(`Pesanan terbaru ${latestPendingOrder.orderCode} terverifikasi.`);
+                      setActiveQrOrder({ ...latestPendingOrder, paymentStatus: 'VERIFIED' });
+                    } catch {
+                      showToast(`Gagal memverifikasi pesanan ${latestPendingOrder.orderCode}.`);
+                    }
+                  }}
+                  className="whoops-btn whoops-btn-primary px-4 py-2.5 text-xs sm:text-sm cursor-pointer"
+                >
+                  VERIFIKASI &amp; BUKA QR
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await rejectOrderPayment(latestPendingOrder.id);
+                      showToast(`Pesanan ${latestPendingOrder.orderCode} ditolak.`);
+                    } catch {
+                      showToast(`Gagal menolak pesanan ${latestPendingOrder.orderCode}.`);
+                    }
+                  }}
+                  className="whoops-btn whoops-btn-ghost px-3.5 py-2.5 text-xs cursor-pointer"
+                >
+                  TOLAK
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="whoops-card overflow-hidden">
           <div className="p-4 border-b border-[#3A231E]/15 flex flex-wrap items-center justify-between gap-3 bg-[#EFE2CE]/40">
             <div className="relative w-full sm:w-64">
               <Search className="w-4 h-4 text-[#61433B] absolute left-3 top-1/2 -translate-y-1/2" />
@@ -425,22 +605,49 @@ export function AdminDashboard({
                     </td>
                   </tr>
                 ) : (
-                  filteredOrders.map((o) => (
+                  filteredOrders.map((o, idx) => (
                     <tr
                       key={o.id}
                       className="border-t border-[#3A231E]/10 hover:bg-[#EFE2CE]/30"
                     >
                       <td className="py-3 px-4">
-                        <div className="font-mono-tabular font-bold text-[#3A231E]">
-                          {o.orderCode}
-                        </div>
-                        <div className="text-[11px] text-[#61433B] tabular-nums">
-                          {formatOrderTime(o.createdAt)}
+                        <div className="flex items-center gap-2.5">
+                          {o.previewThumbUrl && (
+                            <div className="w-9 aspect-[1205/1795] rounded-md overflow-hidden border border-[#3A231E] bg-white shrink-0">
+                              <img
+                                src={o.previewThumbUrl}
+                                alt={`Thumb ${o.orderCode}`}
+                                className="w-full h-full object-contain"
+                              />
+                            </div>
+                          )}
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono-tabular font-bold text-[#3A231E]">
+                                {o.orderCode}
+                              </span>
+                              {idx === 0 && statusFilter === 'ALL' && !searchTerm.trim() && (
+                                <span className="px-1.5 py-0.5 rounded bg-[#F3D2DB] border border-[#3A231E] text-[9px] font-display font-bold text-[#6D1D3A]">
+                                  TERBARU
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-[#61433B] tabular-nums">
+                              {formatOrderTime(o.createdAt)}
+                            </div>
+                          </div>
                         </div>
                       </td>
                       <td className="py-3 px-4">
-                        {o.packageName}
-                        {o.wantsPrint ? ' + Print' : ''}
+                        <div>
+                          {o.packageName}
+                          {o.wantsPrint ? ' + Print' : ''}
+                        </div>
+                        {o.doodleNotes && (
+                          <div className="text-[11px] text-[#61433B] max-w-[220px] truncate">
+                            {o.doodleNotes}
+                          </div>
+                        )}
                       </td>
                       <td className="py-3 px-4 font-display font-bold text-[#6D1D3A] tabular-nums">
                         {rupiah(o.totalAmount)}
@@ -510,6 +717,7 @@ export function AdminDashboard({
                 )}
               </tbody>
             </table>
+          </div>
           </div>
         </div>
       )}
@@ -814,6 +1022,232 @@ export function AdminDashboard({
                 </div>
               );
             })}
+          </div>
+
+          {/* Voucher Discount Management */}
+          <div className="whoops-card p-5 space-y-5">
+            <div>
+              <div className="inline-flex items-center gap-1.5 text-xs font-display font-bold text-[#6D1D3A] mb-1">
+                <Tag className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>VOUCHER DISKON KASIR</span>
+              </div>
+              <h3 className="font-display font-bold text-lg text-[#3A231E]">
+                Kelola Kode Voucher &amp; Potongan Harga
+              </h3>
+              <p className="text-xs text-[#61433B]">
+                Kode voucher yang aktif dapat langsung dimasukkan pelanggan saat memilih paket sebelum dikirim ke kasir.
+              </p>
+            </div>
+
+            <form
+              onSubmit={handleCreateVoucher}
+              className="bg-[#EFE2CE]/60 border-2 border-[#3A231E] rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 items-end"
+            >
+              <div className="lg:col-span-3">
+                <label className="block text-[11px] font-display font-semibold mb-1">
+                  Kode Voucher
+                </label>
+                <input
+                  required
+                  value={newVoucherCode}
+                  onChange={(e) => setNewVoucherCode(normalizeVoucherCode(e.target.value))}
+                  placeholder="Misal: HEMAT5K"
+                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white font-mono-tabular uppercase"
+                />
+              </div>
+
+              <div className="lg:col-span-2">
+                <label className="block text-[11px] font-display font-semibold mb-1">
+                  Jenis Potongan
+                </label>
+                <select
+                  value={newVoucherType}
+                  onChange={(e) => {
+                    const nextType = e.target.value as DiscountType;
+                    setNewVoucherType(nextType);
+                    setNewVoucherValue(nextType === 'percent' ? 10 : 5000);
+                  }}
+                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white"
+                >
+                  <option value="fixed">Nominal (Rp)</option>
+                  <option value="percent">Persen (%)</option>
+                </select>
+              </div>
+
+              <div className="lg:col-span-2">
+                <label className="block text-[11px] font-display font-semibold mb-1">
+                  {newVoucherType === 'percent' ? 'Diskon (%)' : 'Potongan (Rp)'}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={newVoucherType === 'percent' ? 100 : 10000000}
+                  value={newVoucherValue}
+                  onChange={(e) => setNewVoucherValue(Number(e.target.value))}
+                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white tabular-nums"
+                />
+              </div>
+
+              <div className="lg:col-span-3">
+                <label className="block text-[11px] font-display font-semibold mb-1">
+                  Keterangan (Opsional)
+                </label>
+                <input
+                  value={newVoucherDesc}
+                  onChange={(e) => setNewVoucherDesc(e.target.value)}
+                  placeholder="Misal: Diskon pembukaan booth"
+                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white"
+                />
+              </div>
+
+              <div className="lg:col-span-2">
+                <button
+                  type="submit"
+                  disabled={savingId === 'new-voucher'}
+                  className="whoops-btn whoops-btn-primary w-full py-2.5 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{savingId === 'new-voucher' ? 'Menyimpan...' : 'Tambah Voucher'}</span>
+                </button>
+              </div>
+            </form>
+
+            {vouchers.length === 0 ? (
+              <div className="p-6 text-center text-xs text-[#61433B] bg-[#FDF7EE] rounded-2xl border-2 border-dashed border-[#3A231E]/35">
+                Belum ada kode voucher dibuat. Gunakan formulir di atas untuk menambahkan voucher promo.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {vouchers.map((v) => {
+                  const draft = voucherDrafts[v.id] || v;
+                  const confirmDel = confirmDeleteVoucherId === v.id;
+                  return (
+                    <div
+                      key={v.id}
+                      className={`whoops-card-sm p-4 flex flex-col gap-3 ${
+                        draft.isActive ? 'bg-[#FDF7EE]' : 'bg-[#EFE2CE]/55 opacity-80'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="px-2.5 py-1 rounded-lg bg-[#6D1D3A] text-[#FDF7EE] border border-[#3A231E] font-mono-tabular text-xs font-bold">
+                          {draft.code}
+                        </span>
+                        <span className="font-display font-bold text-sm text-[#6D1D3A] tabular-nums">
+                          - {formatVoucherBenefit(draft)}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-display font-semibold mb-1">
+                            Jenis
+                          </label>
+                          <select
+                            value={draft.discountType}
+                            onChange={(e) =>
+                              setVoucherDrafts((prev) => ({
+                                ...prev,
+                                [v.id]: {
+                                  ...draft,
+                                  discountType: e.target.value as DiscountType,
+                                },
+                              }))
+                            }
+                            className="w-full border-2 border-[#3A231E] rounded-lg px-2 py-1.5 text-xs bg-white"
+                          >
+                            <option value="fixed">Nominal (Rp)</option>
+                            <option value="percent">Persen (%)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-display font-semibold mb-1">
+                            Nilai
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={draft.discountType === 'percent' ? 100 : 10000000}
+                            value={draft.discountValue}
+                            onChange={(e) =>
+                              setVoucherDrafts((prev) => ({
+                                ...prev,
+                                [v.id]: { ...draft, discountValue: Number(e.target.value) },
+                              }))
+                            }
+                            className="w-full border-2 border-[#3A231E] rounded-lg px-2.5 py-1.5 text-xs bg-white tabular-nums"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] font-display font-semibold mb-1">
+                          Keterangan
+                        </label>
+                        <input
+                          value={draft.description}
+                          onChange={(e) =>
+                            setVoucherDrafts((prev) => ({
+                              ...prev,
+                              [v.id]: { ...draft, description: e.target.value },
+                            }))
+                          }
+                          placeholder="Deskripsi singkat"
+                          className="w-full border-2 border-[#3A231E] rounded-lg px-2.5 py-1.5 text-xs bg-white"
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <label className="text-xs font-display font-semibold inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={draft.isActive}
+                            onChange={(e) =>
+                              setVoucherDrafts((prev) => ({
+                                ...prev,
+                                [v.id]: { ...draft, isActive: e.target.checked },
+                              }))
+                            }
+                            className="accent-[#6D1D3A]"
+                          />
+                          Aktif
+                        </label>
+
+                        <div className="flex gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleSaveVoucher(v.id)}
+                            disabled={savingId === v.id}
+                            className="whoops-btn whoops-btn-secondary whoops-btn-compact px-3 py-1.5 text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Save className="w-3 h-3" aria-hidden="true" />
+                            <span>{savingId === v.id ? 'Menyimpan...' : 'Simpan'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!confirmDel) {
+                                setConfirmDeleteVoucherId(v.id);
+                                window.setTimeout(() => setConfirmDeleteVoucherId(null), 3200);
+                              } else {
+                                handleDeleteVoucher(v);
+                              }
+                            }}
+                            disabled={savingId === v.id}
+                            className={`whoops-btn whoops-btn-compact px-2.5 py-1.5 text-[11px] inline-flex items-center gap-1 cursor-pointer ${
+                              confirmDel ? 'whoops-btn-primary' : 'whoops-btn-ghost text-[#6D1D3A]'
+                            }`}
+                            aria-label={`Hapus voucher ${v.code}`}
+                          >
+                            <Trash2 className="w-3 h-3" aria-hidden="true" />
+                            {confirmDel && <span>Yakin?</span>}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

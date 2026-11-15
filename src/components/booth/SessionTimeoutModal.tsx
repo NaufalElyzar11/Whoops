@@ -56,7 +56,7 @@ export function SessionTimeoutModal({
           id="session-timeout-title"
           className="font-display font-bold text-2xl sm:text-3xl text-[#3A231E]"
         >
-          Waktu Sesi 5 Menit Habis
+          Waktu Sesi 6 Menit Habis
         </h2>
 
         <p className="text-sm text-[#61433B] mt-2 leading-relaxed">

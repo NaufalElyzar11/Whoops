@@ -9,13 +9,20 @@ import {
   Receipt,
   Sparkles,
   Store,
+  Tag,
+  X,
 } from 'lucide-react';
 import { rupiah } from '../../constants/defaults';
 import type {
   PhotoboothOrder,
   ServicePackage,
   StoreSettings,
+  VoucherCode,
 } from '../../types';
+import {
+  calculateVoucherDiscount,
+  formatVoucherBenefit,
+} from '../../utils/voucher';
 
 interface CheckoutStepProps {
   activePkgs: ServicePackage[];
@@ -25,6 +32,9 @@ interface CheckoutStepProps {
   setWantsPrintOpt: (val: boolean) => void;
   doodleNotes: string;
   setDoodleNotes: (val: string) => void;
+  appliedVoucher: VoucherCode | null;
+  onApplyVoucher: (code: string) => { ok: boolean; error?: string };
+  onRemoveVoucher: () => void;
   settings: StoreSettings;
   finalCompositePng: string | null;
   catalogSynced: boolean;
@@ -47,6 +57,9 @@ export function CheckoutStep({
   setWantsPrintOpt,
   doodleNotes,
   setDoodleNotes,
+  appliedVoucher,
+  onApplyVoucher,
+  onRemoveVoucher,
   settings,
   finalCompositePng,
   catalogSynced,
@@ -60,12 +73,26 @@ export function CheckoutStep({
 }: CheckoutStepProps) {
   const [autoResetLeft, setAutoResetLeft] = useState(TICKET_AUTO_RESET_SECONDS);
   const [holdScreen, setHoldScreen] = useState(false);
+  const [voucherInput, setVoucherInput] = useState('');
+  const [voucherError, setVoucherError] = useState<string | null>(null);
 
-  // Auto-reset booth shortly after issuing the cashier ticket so the next guest can enter.
+  const handleTryApplyVoucher = () => {
+    const res = onApplyVoucher(voucherInput);
+    if (res.ok) {
+      setVoucherError(null);
+      setVoucherInput('');
+    } else {
+      setVoucherError(res.error || 'Kode voucher tidak valid.');
+    }
+  };
+
+  // Auto-reset booth shortly after sending to cashier so the next guest can enter.
   useEffect(() => {
     if (!currentOrderId) {
       setAutoResetLeft(TICKET_AUTO_RESET_SECONDS);
       setHoldScreen(false);
+      setVoucherInput('');
+      setVoucherError(null);
       return;
     }
     if (holdScreen) return;
@@ -97,7 +124,7 @@ export function CheckoutStep({
           {!liveOrder ? (
             <div className="py-10 flex flex-col items-center gap-2 text-sm text-[#61433B]">
               <Loader2 className="w-7 h-7 animate-spin text-[#6D1D3A]" aria-hidden="true" />
-              <span>Mencetak kode antrean kasir...</span>
+              <span>Mengirim foto ke layar kasir...</span>
             </div>
           ) : (
             <>
@@ -107,27 +134,43 @@ export function CheckoutStep({
               </div>
 
               <h1 className="font-display font-bold text-2xl sm:text-3xl text-[#3A231E]">
-                Tunjukkan Kode Ini ke Penjaga
+                Foto Kamu Sudah Masuk ke Kasir!
               </h1>
 
-              {/* Big Monospace Order Code */}
+              {/* Latest Queue Visual Confirmation Card (No code memorization required) */}
               <motion.div
-                initial={{ scale: 0.92 }}
+                initial={{ scale: 0.94 }}
                 animate={{ scale: 1 }}
-                transition={{ delay: 0.1, type: 'spring', stiffness: 360, damping: 18 }}
-                className="my-5 py-5 px-6 rounded-2xl bg-[#EFE2CE] border-2 border-dashed border-[#3A231E]"
+                transition={{ delay: 0.08, type: 'spring', stiffness: 360, damping: 20 }}
+                className="my-5 p-4 sm:p-5 rounded-2xl bg-[#EFE2CE] border-2 border-dashed border-[#3A231E] flex flex-col sm:flex-row items-center gap-4 text-center sm:text-left"
               >
-                <div className="text-xs font-display font-semibold text-[#61433B] uppercase tracking-wider">
-                  Kode Pesanan Kamu
-                </div>
-                <div className="font-mono-tabular font-bold text-4xl sm:text-5xl text-[#6D1D3A] tracking-wider mt-1">
-                  {liveOrder.orderCode}
-                </div>
-                <div className="mt-2.5 text-sm font-display font-semibold text-[#3A231E]">
-                  {liveOrder.packageName}
-                  {liveOrder.wantsPrint ? ' + Cetak 4R' : ''}
-                  {' | '}
-                  <span className="text-[#6D1D3A] tabular-nums">{rupiah(liveOrder.totalAmount)}</span>
+                {(finalCompositePng || liveOrder.previewThumbUrl) && (
+                  <div className="w-24 aspect-[1205/1795] rounded-xl overflow-hidden border-2 border-[#3A231E] bg-white shrink-0 shadow-[2px_2px_0_#3A231E]">
+                    <img
+                      src={finalCompositePng || liveOrder.previewThumbUrl}
+                      alt="Hasil foto terkirim ke kasir"
+                      className="w-full h-full object-contain"
+                    />
+                  </div>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  <span className="inline-block px-2.5 py-0.5 rounded-md bg-[#F3D2DB] border border-[#3A231E] text-[10px] font-display font-bold text-[#6D1D3A] uppercase tracking-wide mb-1.5">
+                    Urutan Terbaru di Meja Penjaga
+                  </span>
+                  <div className="font-display font-bold text-base sm:text-lg text-[#3A231E]">
+                    {liveOrder.packageName}
+                    {liveOrder.wantsPrint ? ' + Cetak 4R' : ''}
+                  </div>
+                  <div className="font-display font-bold text-3xl text-[#6D1D3A] tabular-nums mt-0.5">
+                    {rupiah(liveOrder.totalAmount)}
+                  </div>
+                  <p className="text-xs text-[#61433B] mt-1.5 leading-snug">
+                    Tidak perlu menghafal kode. Penjaga kasir langsung mengenali foto terbaru kamu di antrean paling atas.
+                  </p>
+                  <div className="mt-2 inline-block px-2 py-0.5 rounded bg-[#FDF7EE] border border-[#3A231E]/25 font-mono-tabular text-[11px] text-[#61433B]">
+                    Ref antrean: {liveOrder.orderCode}
+                  </div>
                 </div>
               </motion.div>
 
@@ -136,12 +179,12 @@ export function CheckoutStep({
                   {
                     step: '1',
                     title: 'Keluar dari Booth',
-                    desc: `Sebutkan kode ${liveOrder.orderCode} di meja kasir luar.`,
+                    desc: 'Langsung menuju meja penjaga di luar booth.',
                   },
                   {
                     step: '2',
                     title: 'Bayar di Penjaga',
-                    desc: `Bayar QRIS atau tunai sebesar ${rupiah(liveOrder.totalAmount)}.`,
+                    desc: `Konfirmasi foto terbarumu & bayar ${rupiah(liveOrder.totalAmount)}.`,
                   },
                   {
                     step: '3',
@@ -219,10 +262,17 @@ export function CheckoutStep({
     );
   }
 
-  // View A: Package Selection & Submit to Outside Cashier
+  // View A: Package Selection, Voucher & Submit to Outside Cashier
   const effectivePkg = selectedPkg || activePkgs[0] || null;
-  const printFee = wantsPrintOpt ? settings.printAddonPrice : 0;
-  const total = effectivePkg ? effectivePkg.digitalPrice + printFee : 0;
+  const effectivePrint = effectivePkg
+    ? effectivePkg.code === 'PHOTO_ONLY'
+      ? wantsPrintOpt
+      : effectivePkg.includesPrint
+    : false;
+  const printFee = effectivePrint ? settings.printAddonPrice : 0;
+  const subtotal = effectivePkg ? effectivePkg.digitalPrice + printFee : 0;
+  const discountAmount = calculateVoucherDiscount(subtotal, appliedVoucher);
+  const total = Math.max(0, subtotal - discountAmount);
 
   return (
     <section className="grid grid-cols-1 md:grid-cols-12 gap-5 items-stretch">
@@ -335,6 +385,80 @@ export function CheckoutStep({
               />
             </div>
           )}
+
+          {/* Voucher Code Box */}
+          <div className="mt-4 pt-3.5 border-t border-dashed border-[#3A231E]/25">
+            <label
+              htmlFor="voucher-code-input"
+              className="flex items-center gap-1.5 text-xs font-display font-semibold text-[#3A231E] mb-1.5"
+            >
+              <Tag className="w-3.5 h-3.5 text-[#6D1D3A]" aria-hidden="true" />
+              <span>Punya Kode Voucher? (Opsional)</span>
+            </label>
+
+            {appliedVoucher ? (
+              <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-emerald-50 border-2 border-[#3A231E] text-xs">
+                <div className="min-w-0">
+                  <span className="font-mono-tabular font-bold text-emerald-900">
+                    {appliedVoucher.code}
+                  </span>
+                  <span className="text-[#3A231E] ml-1.5">
+                    ({formatVoucherBenefit(appliedVoucher)} -&gt; -{rupiah(discountAmount)})
+                  </span>
+                  {appliedVoucher.description && (
+                    <div className="text-[11px] text-[#61433B] truncate">
+                      {appliedVoucher.description}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRemoveVoucher();
+                    setVoucherError(null);
+                  }}
+                  className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1 text-[11px] inline-flex items-center gap-1 shrink-0 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Hapus</span>
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="flex gap-2">
+                  <input
+                    id="voucher-code-input"
+                    type="text"
+                    value={voucherInput}
+                    onChange={(e) => {
+                      setVoucherInput(e.target.value.toUpperCase());
+                      if (voucherError) setVoucherError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleTryApplyVoucher();
+                      }
+                    }}
+                    placeholder="Contoh: HEMAT5K"
+                    className="flex-1 min-w-0 border-2 border-[#3A231E] rounded-xl px-3 py-2 bg-white text-sm font-mono-tabular uppercase"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTryApplyVoucher}
+                    className="whoops-btn whoops-btn-secondary px-4 py-2 text-xs whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    Pakai Voucher
+                  </button>
+                </div>
+                {voucherError && (
+                  <p role="status" className="text-[11px] font-medium text-[#6D1D3A] mt-1.5">
+                    {voucherError}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="mt-4 bg-[#EFE2CE] border-2 border-[#3A231E] rounded-2xl p-4 text-sm">
@@ -344,15 +468,28 @@ export function CheckoutStep({
             </span>
             <b className="tabular-nums">{rupiah(effectivePkg?.digitalPrice || 0)}</b>
           </div>
-          <div className="flex justify-between mb-2">
+          <div className="flex justify-between mb-1">
             <span>Biaya Cetak 4R</span>
             <b className="tabular-nums">
-              {wantsPrintOpt ? rupiah(settings.printAddonPrice) : 'Rp 0 (Digital Only)'}
+              {effectivePrint ? rupiah(settings.printAddonPrice) : 'Rp 0 (Digital Only)'}
             </b>
           </div>
-          <div className="border-t border-[#3A231E]/25 pt-2 flex justify-between font-display font-bold text-xl text-[#6D1D3A] tabular-nums">
+          {appliedVoucher && discountAmount > 0 && (
+            <div className="flex justify-between mb-2 text-[#6D1D3A]">
+              <span>Potongan Voucher ({appliedVoucher.code})</span>
+              <b className="tabular-nums">- {rupiah(discountAmount)}</b>
+            </div>
+          )}
+          <div className="border-t border-[#3A231E]/25 pt-2 flex justify-between items-baseline font-display font-bold text-xl text-[#6D1D3A] tabular-nums">
             <span>Total Bayar di Kasir</span>
-            <span>{rupiah(total)}</span>
+            <span className="inline-flex items-baseline gap-2">
+              {discountAmount > 0 && (
+                <span className="text-xs font-normal text-[#61433B] line-through">
+                  {rupiah(subtotal)}
+                </span>
+              )}
+              <span>{rupiah(total)}</span>
+            </span>
           </div>
         </div>
       </div>
@@ -390,7 +527,7 @@ export function CheckoutStep({
                 {rupiah(total)}
               </div>
               <p className="text-[11px] text-[#61433B] mt-1 leading-snug">
-                Setelah klik tombol di bawah, bawa kode pesanan ke kasir untuk bayar &amp; scan QR unduh foto.
+                Setelah klik tombol di bawah, fotomu langsung masuk urutan teratas di kasir untuk bayar &amp; scan QR unduh.
               </p>
             </div>
           </div>
@@ -427,7 +564,7 @@ export function CheckoutStep({
               ) : (
                 <>
                   <Receipt className="w-5 h-5" aria-hidden="true" />
-                  <span>KIRIM KE KASIR &amp; DAPAT KODE</span>
+                  <span>SELESAI &amp; KIRIM KE KASIR</span>
                 </>
               )}
             </motion.button>

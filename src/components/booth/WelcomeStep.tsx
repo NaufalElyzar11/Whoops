@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Camera, RefreshCw, Sparkles } from 'lucide-react';
+import { Camera, Clock, RefreshCw, Sparkles } from 'lucide-react';
 import type { PhotoFrame } from '../../types';
 import { FramePreviewCanvas } from '../FramePreviewCanvas';
 import { WhoopsLogo } from '../WhoopsLogo';
@@ -14,7 +14,7 @@ const STUDIO_STEPS = [
   { num: '01', title: 'Pilih Frame', desc: 'Tentukan layout 6-slot favoritmu.' },
   { num: '02', title: 'Pose & Retake', desc: 'Timer 3 detik, mirror & retake bebas.' },
   { num: '03', title: 'Edit 6 Slot', desc: 'Pilih foto, filter retro & atur brightness.' },
-  { num: '04', title: 'Bayar di Kasir', desc: 'Pilih paket lalu bawa kode ke penjaga.' },
+  { num: '04', title: 'Bayar di Kasir', desc: 'Pilih paket lalu langsung ke meja kasir.' },
 ];
 
 export function WelcomeStep({ activeFrames, onStartSession }: WelcomeStepProps) {
@@ -55,21 +55,24 @@ export function WelcomeStep({ activeFrames, onStartSession }: WelcomeStepProps) 
               "oops, we made a memory."
             </motion.p>
 
-            <div className="flex flex-col sm:flex-row items-center md:items-start gap-3 mb-6">
+            <div className="flex flex-col lg:flex-row lg:items-stretch gap-3 mb-6">
               <motion.button
                 type="button"
                 onClick={onStartSession}
                 whileHover={{ y: -2 }}
                 whileTap={{ scale: 0.96 }}
-                className="whoops-btn whoops-btn-primary text-base sm:text-lg px-8 py-4 inline-flex items-center justify-center gap-2.5 cursor-pointer w-full sm:w-auto"
+                className="whoops-btn whoops-btn-primary text-base sm:text-lg px-6 py-4 inline-flex items-center justify-center gap-2.5 cursor-pointer w-full lg:w-auto whitespace-nowrap shrink-0"
               >
-                <Camera className="w-5 h-5" aria-hidden="true" />
+                <Camera className="w-5 h-5 shrink-0" aria-hidden="true" />
                 <span>START PHOTO SESSION</span>
               </motion.button>
-              <div className="text-xs text-[#61433B] bg-[#EFE2CE]/75 border border-[#3A231E]/25 rounded-xl px-3.5 py-2.5 text-center sm:text-left">
-                Durasi sesi booth <b className="font-mono-tabular text-[#3A231E]">05:00</b> menit.
-                <br />
-                Pembayaran dilakukan di meja kasir setelah selesai foto.
+              <div className="flex-1 flex items-center justify-center lg:justify-start gap-2.5 text-xs text-[#61433B] bg-[#EFE2CE]/80 border-2 border-[#3A231E]/35 rounded-2xl px-4 py-3 text-center lg:text-left leading-snug">
+                <Clock className="w-4 h-4 text-[#6D1D3A] shrink-0 hidden sm:block" aria-hidden="true" />
+                <span>
+                  Durasi sesi booth <b className="font-mono-tabular text-[#3A231E]">06:00</b> menit.
+                  <br />
+                  Pembayaran dilakukan di meja kasir setelah selesai foto.
+                </span>
               </div>
             </div>
 

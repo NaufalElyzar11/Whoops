@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -411,6 +412,15 @@ export async function savePackage(pkg: ServicePackage): Promise<void> {
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deletePackage(packageId: string): Promise<void> {
+  const path = `packages/${packageId}`;
+  try {
+    await deleteDoc(doc(db, 'packages', packageId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 

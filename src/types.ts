@@ -70,6 +70,17 @@ export interface ServicePackage {
   updatedAt?: unknown;
 }
 
+export type DiscountType = 'fixed' | 'percent';
+
+export interface VoucherCode {
+  id: string;
+  code: string;
+  discountType: DiscountType;
+  discountValue: number;
+  description: string;
+  isActive: boolean;
+}
+
 export interface PhotoFrame {
   id: string;
   name: string;

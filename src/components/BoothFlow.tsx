@@ -12,12 +12,18 @@ import {
   type ServicePackage,
   type SlotAssignment,
   type StoreSettings,
+  type VoucherCode,
 } from '../types';
 import {
   buildComposite4R,
   captureVideoSlotFrame,
   createDemoPosePhoto,
 } from '../utils/canvasEngine';
+import {
+  appendVoucherNote,
+  calculateVoucherDiscount,
+  normalizeVoucherCode,
+} from '../utils/voucher';
 import { CameraStep, type RetakeTarget } from './booth/CameraStep';
 import { CheckoutStep } from './booth/CheckoutStep';
 import { EditorStep } from './booth/EditorStep';
@@ -30,6 +36,7 @@ interface BoothFlowProps {
   step: BoothStep;
   setStep: (step: BoothStep) => void;
   packages: ServicePackage[];
+  vouchers: VoucherCode[];
   frames: PhotoFrame[];
   settings: StoreSettings;
   catalogSynced: boolean;
@@ -57,6 +64,7 @@ export function BoothFlow({
   step,
   setStep,
   packages,
+  vouchers,
   frames,
   settings,
   catalogSynced,
@@ -90,6 +98,7 @@ export function BoothFlow({
 
   const [wantsPrintOpt, setWantsPrintOpt] = useState(false);
   const [doodleNotes, setDoodleNotes] = useState('');
+  const [appliedVoucherCode, setAppliedVoucherCode] = useState<string | null>(null);
   const [finalCompositePng, setFinalCompositePng] = useState<string | null>(null);
   const [previewThumbUrl, setPreviewThumbUrl] = useState<string>('');
   const [isCompositing, setIsCompositing] = useState(false);
@@ -113,6 +122,9 @@ export function BoothFlow({
   const selectedPkg =
     packages.find((p) => p.id === selectedPkgId) || activePkgs[0] || null;
   const selectedFrame = frames.find((f) => f.id === selectedFrameId) || null;
+  const appliedVoucher = appliedVoucherCode
+    ? vouchers.find((v) => v.isActive && v.code === appliedVoucherCode) || null
+    : null;
 
   useEffect(() => {
     if (step === 'checkout' && selectedPkg) {
@@ -218,6 +230,7 @@ export function BoothFlow({
     setSelectedSlotIndex(0);
     setWantsPrintOpt(false);
     setDoodleNotes('');
+    setAppliedVoucherCode(null);
     setFinalCompositePng(null);
     setPreviewThumbUrl('');
     setCurrentOrderId(null);
@@ -451,6 +464,22 @@ export function BoothFlow({
     setWantsPrintOpt(pkg.includesPrint);
   };
 
+  const handleApplyVoucher = (rawCode: string): { ok: boolean; error?: string } => {
+    const clean = normalizeVoucherCode(rawCode);
+    if (!clean) {
+      return { ok: false, error: 'Masukkan kode voucher terlebih dahulu.' };
+    }
+    const found = vouchers.find((v) => v.code === clean);
+    if (!found) {
+      return { ok: false, error: `Kode "${clean}" tidak ditemukan.` };
+    }
+    if (!found.isActive) {
+      return { ok: false, error: `Voucher "${clean}" sedang tidak aktif.` };
+    }
+    setAppliedVoucherCode(found.code);
+    return { ok: true };
+  };
+
   const handleSubmitOrder = async () => {
     const pkgToSubmit = selectedPkg || activePkgs[0];
     const frameToSubmit = selectedFrame || activeFrames[0];
@@ -461,14 +490,17 @@ export function BoothFlow({
     const effectivePrint =
       pkgToSubmit.code === 'PHOTO_ONLY' ? wantsPrintOpt : pkgToSubmit.includesPrint;
     const printFee = effectivePrint ? settings.printAddonPrice : 0;
-    const totalAmount = pkgToSubmit.digitalPrice + printFee;
+    const subtotal = pkgToSubmit.digitalPrice + printFee;
+    const discountAmount = calculateVoucherDiscount(subtotal, appliedVoucher);
+    const totalAmount = Math.max(0, subtotal - discountAmount);
+    const notesWithVoucher = appendVoucherNote(doodleNotes, appliedVoucher, discountAmount);
 
     try {
       const orderId = await createPhotoboothOrder({
         pkg: pkgToSubmit,
         frameId: frameToSubmit.id,
         wantsPrint: effectivePrint,
-        doodleNotes,
+        doodleNotes: notesWithVoucher,
         totalAmount,
         fullPngDataUrl: finalCompositePng,
         previewThumbUrl,
@@ -601,6 +633,9 @@ export function BoothFlow({
           setWantsPrintOpt={setWantsPrintOpt}
           doodleNotes={doodleNotes}
           setDoodleNotes={setDoodleNotes}
+          appliedVoucher={appliedVoucher}
+          onApplyVoucher={handleApplyVoucher}
+          onRemoveVoucher={() => setAppliedVoucherCode(null)}
           settings={settings}
           finalCompositePng={finalCompositePng}
           catalogSynced={catalogSynced}

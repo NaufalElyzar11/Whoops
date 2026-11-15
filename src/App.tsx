@@ -24,8 +24,9 @@ import type {
   ServicePackage,
   StoreSettings,
 } from './types';
+import { isVoucherPackage, packageToVoucher } from './utils/voucher';
 
-const SESSION_DURATION_SECONDS = 300; // 5 minutes per booth session
+const SESSION_DURATION_SECONDS = 360; // 6 minutes per booth session
 
 const STEP_LABELS: Partial<Record<BoothStep, string>> = {
   frame: '1/5 Pilih Frame',
@@ -60,7 +61,7 @@ export default function App() {
   const [step, setStep] = useState<BoothStep>('welcome');
   const [headerPkgName, setHeaderPkgName] = useState<string | null>(null);
 
-  // 5-Minute Booth Session Timer State
+  // 6-Minute Booth Session Timer State
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number | null>(null);
   const [sessionOrderSubmitted, setSessionOrderSubmitted] = useState(false);
   const [hasExtendedOnce, setHasExtendedOnce] = useState(false);
@@ -165,7 +166,10 @@ export default function App() {
     );
   }
 
-  const packages = packagesSynced ? cloudPackages : DEFAULT_PACKAGES;
+  const rawPackages = packagesSynced ? cloudPackages : DEFAULT_PACKAGES;
+  const parsedPackages = rawPackages.filter((p) => !isVoucherPackage(p));
+  const packages = parsedPackages.length > 0 ? parsedPackages : DEFAULT_PACKAGES;
+  const vouchers = rawPackages.filter(isVoucherPackage).map(packageToVoucher);
   const frames = framesSynced ? cloudFrames : DEFAULT_FRAMES;
   const catalogSynced = packagesSynced && framesSynced;
 
@@ -271,6 +275,7 @@ export default function App() {
               step={step}
               setStep={setStep}
               packages={packages}
+              vouchers={vouchers}
               frames={frames}
               settings={settings}
               catalogSynced={catalogSynced}
@@ -289,6 +294,7 @@ export default function App() {
               user={user}
               authLoading={authLoading}
               packages={packages}
+              vouchers={vouchers}
               frames={frames}
               settings={settings}
             />
