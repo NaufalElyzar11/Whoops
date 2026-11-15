@@ -15,6 +15,7 @@ import {
 } from '../types';
 import {
   buildComposite4R,
+  captureVideoSlotFrame,
   createDemoPosePhoto,
 } from '../utils/canvasEngine';
 import { CameraStep, type RetakeTarget } from './booth/CameraStep';
@@ -175,7 +176,7 @@ export function BoothFlow({
         }
         setCameraReady(true);
         setCameraError(null);
-        setCamStatusMsg('Kamera aktif. Tekan CAPTURE (3s) atau gunakan Pose Demo.');
+        setCamStatusMsg('Kamera aktif (rasio sudah pas slot frame). Tekan CAPTURE (3s) atau gunakan Pose Demo.');
       } catch {
         if (cancelled) return;
         const msg =
@@ -305,17 +306,8 @@ export function BoothFlow({
         setShutterFlash(true);
         window.setTimeout(() => setShutterFlash(false), 220);
 
-        const c = document.createElement('canvas');
-        c.width = video.videoWidth;
-        c.height = video.videoHeight;
-        const ctx = c.getContext('2d');
-        if (ctx) {
-          if (saveMirrored) {
-            ctx.translate(c.width, 0);
-            ctx.scale(-1, 1);
-          }
-          ctx.drawImage(video, 0, 0);
-          const dataUrl = c.toDataURL('image/jpeg', 0.92);
+        const dataUrl = captureVideoSlotFrame(video, saveMirrored);
+        if (dataUrl) {
           commitCapturedDataUrl(dataUrl);
         }
       }

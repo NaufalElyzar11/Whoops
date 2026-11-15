@@ -12,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { CapturedPhoto } from '../../types';
+import { SLOT_ASPECT_RATIO } from '../../utils/canvasEngine';
 
 export interface RetakeTarget {
   photoId: string;
@@ -133,8 +134,15 @@ export function CameraStep({
           )}
         </AnimatePresence>
 
-        {/* Viewfinder */}
-        <div className="relative aspect-[4/3] bg-[#2a1713] border-2 border-[#3A231E] rounded-2xl overflow-hidden shadow-[3px_3px_0_#3A231E]">
+        {/* Viewfinder sized to exact 4R slot aspect ratio so live framing matches printed output */}
+        <div className="flex justify-center">
+          <div
+            style={{
+              aspectRatio: String(SLOT_ASPECT_RATIO),
+              width: `min(100%, calc(min(54dvh, 450px) * ${SLOT_ASPECT_RATIO}))`,
+            }}
+            className="relative bg-[#2a1713] border-2 border-[#3A231E] rounded-2xl overflow-hidden shadow-[3px_3px_0_#3A231E]"
+          >
           <video
             ref={videoRef}
             autoPlay
@@ -297,6 +305,7 @@ export function CameraStep({
               className="absolute inset-0 z-40 bg-white pointer-events-none"
             />
           )}
+          </div>
         </div>
 
         <p className="text-xs text-[#61433B] mt-2.5 mb-3">{camStatusMsg}</p>
@@ -398,7 +407,10 @@ export function CameraStep({
                         : 'border-[#3A231E]'
                     }`}
                   >
-                    <div className="relative aspect-[4/3] overflow-hidden">
+                    <div
+                      style={{ aspectRatio: String(SLOT_ASPECT_RATIO) }}
+                      className="relative overflow-hidden"
+                    >
                       <img
                         src={p.dataUrl}
                         alt={`Pose ${idx + 1}`}

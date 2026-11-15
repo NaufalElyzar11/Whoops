@@ -16,7 +16,7 @@ import {
   type PhotoFrame,
   type SlotAssignment,
 } from '../../types';
-import { getCssFilter } from '../../utils/canvasEngine';
+import { getCssFilter, SLOT_ASPECT_RATIO } from '../../utils/canvasEngine';
 import { FramePreviewCanvas } from '../FramePreviewCanvas';
 
 interface EditorStepProps {
@@ -353,7 +353,8 @@ export function EditorStep({
                         if (suppressClickRef.current) return;
                         setSelectedTrayPhotoId((prev) => (prev === p.id ? null : p.id));
                       }}
-                      className={`relative w-full aspect-[4/3] rounded-xl overflow-hidden border-2 cursor-pointer bg-[#EFE2CE] text-left transition-all ${
+                      style={{ aspectRatio: String(SLOT_ASPECT_RATIO) }}
+                      className={`relative w-full rounded-xl overflow-hidden border-2 cursor-pointer bg-[#EFE2CE] text-left transition-all ${
                         isSelected
                           ? 'border-[#6D1D3A] ring-3 ring-[#E4A3B3] -translate-y-0.5'
                           : 'border-[#3A231E] hover:-translate-y-0.5'
@@ -443,7 +444,10 @@ export function EditorStep({
                             : 'bg-[#FDF7EE] text-[#3A231E] border-[#3A231E]/80 hover:bg-[#EFE2CE]'
                         }`}
                       >
-                        <div className="relative aspect-[4/3] rounded-lg overflow-hidden border border-[#3A231E]/40 bg-[#EFE2CE] mb-1.5">
+                        <div
+                          style={{ aspectRatio: String(SLOT_ASPECT_RATIO) }}
+                          className="relative rounded-lg overflow-hidden border border-[#3A231E]/40 bg-[#EFE2CE] mb-1.5"
+                        >
                           <img
                             src={curPhoto.dataUrl}
                             alt={FILTER_NAMES[key]}
@@ -563,8 +567,8 @@ export function EditorStep({
       {/* Floating Touch/Pointer Drag Ghost */}
       {pointerDrag && (
         <div
-          className="fixed pointer-events-none z-50 w-24 aspect-[4/3] rounded-xl overflow-hidden border-2 border-[#6D1D3A] shadow-[4px_4px_0_#3A231E] -translate-x-1/2 -translate-y-1/2 rotate-3 opacity-95"
-          style={{ left: pointerDrag.x, top: pointerDrag.y }}
+          className="fixed pointer-events-none z-50 w-24 rounded-xl overflow-hidden border-2 border-[#6D1D3A] shadow-[4px_4px_0_#3A231E] -translate-x-1/2 -translate-y-1/2 rotate-3 opacity-95"
+          style={{ left: pointerDrag.x, top: pointerDrag.y, aspectRatio: String(SLOT_ASPECT_RATIO) }}
         >
           <img src={pointerDrag.previewUrl} alt="" className="w-full h-full object-cover" />
         </div>

@@ -9,6 +9,10 @@ import {
 export const CANVAS_4R_WIDTH = 1205;
 export const CANVAS_4R_HEIGHT = 1795;
 
+// Match camera viewfinder & captures to each 4R frame slot so framing matches print 1:1
+export const SLOT_ASPECT_RATIO =
+  (DEFAULT_SLOTS[0].width * CANVAS_4R_WIDTH) / (DEFAULT_SLOTS[0].height * CANVAS_4R_HEIGHT);
+
 export function getCssFilter(filter: FilterType, brightness: number): string {
   const b = Math.max(40, Math.min(160, 100 + brightness));
   switch (filter) {
@@ -152,10 +156,13 @@ export function createDemoPosePhoto(poseNum: number): string {
   ];
   const [bg, fg, label] = palettes[(poseNum - 1) % palettes.length];
   const c = document.createElement('canvas');
-  c.width = 960;
-  c.height = 720;
+  c.width = 1000;
+  c.height = Math.round(1000 / SLOT_ASPECT_RATIO);
   const ctx = c.getContext('2d');
   if (!ctx) return '';
+
+  const cx = c.width / 2;
+  const faceY = Math.round(c.height * 0.41);
 
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, c.width, c.height);
@@ -171,26 +178,26 @@ export function createDemoPosePhoto(poseNum: number): string {
 
   ctx.fillStyle = fg;
   ctx.beginPath();
-  ctx.arc(480, 310, 140, 0, Math.PI * 2);
+  ctx.arc(cx, faceY, 145, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = bg;
   ctx.beginPath();
-  ctx.arc(428, 286, 16, 0, Math.PI * 2);
-  ctx.arc(532, 286, 16, 0, Math.PI * 2);
+  ctx.arc(cx - 54, faceY - 25, 16, 0, Math.PI * 2);
+  ctx.arc(cx + 54, faceY - 25, 16, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.strokeStyle = bg;
   ctx.lineWidth = 12;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.arc(480, 326, 52, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.arc(cx, faceY + 16, 54, 0.15 * Math.PI, 0.85 * Math.PI);
   ctx.stroke();
 
   ctx.fillStyle = fg;
   ctx.font = 'bold 48px Fredoka, ui-rounded, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(`#${poseNum} ${label}`, 480, 570);
+  ctx.fillText(`#${poseNum} ${label}`, cx, Math.round(c.height * 0.78));
 
   return c.toDataURL('image/jpeg', 0.92);
 }
@@ -205,6 +212,46 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+function getCoverCropRect(srcW: number, srcH: number, targetRatio: number) {
+  const srcRatio = srcW / srcH;
+  let sx = 0;
+  let sy = 0;
+  let sw = srcW;
+  let sh = srcH;
+
+  if (srcRatio > targetRatio) {
+    sw = srcH * targetRatio;
+    sx = (srcW - sw) / 2;
+  } else {
+    sh = srcW / targetRatio;
+    sy = (srcH - sh) / 2;
+  }
+
+  return { sx, sy, sw, sh };
+}
+
+/** Center-crops a live <video> frame to match the 4R slot aspect ratio so preview and print match 1:1. */
+export function captureVideoSlotFrame(
+  video: HTMLVideoElement,
+  mirrored: boolean,
+  targetRatio = SLOT_ASPECT_RATIO
+): string {
+  if (video.videoWidth <= 0 || video.videoHeight <= 0) return '';
+  const { sx, sy, sw, sh } = getCoverCropRect(video.videoWidth, video.videoHeight, targetRatio);
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(sw));
+  c.height = Math.max(1, Math.round(sh));
+  const ctx = c.getContext('2d');
+  if (!ctx) return '';
+
+  if (mirrored) {
+    ctx.translate(c.width, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.92);
+}
+
 function drawCoverImage(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
@@ -214,20 +261,7 @@ function drawCoverImage(
   dh: number,
   mirrored: boolean
 ) {
-  const imgRatio = img.width / img.height;
-  const targetRatio = dw / dh;
-  let sx = 0;
-  let sy = 0;
-  let sw = img.width;
-  let sh = img.height;
-
-  if (imgRatio > targetRatio) {
-    sw = img.height * targetRatio;
-    sx = (img.width - sw) / 2;
-  } else {
-    sh = img.width / targetRatio;
-    sy = (img.height - sh) / 2;
-  }
+  const { sx, sy, sw, sh } = getCoverCropRect(img.width, img.height, dw / dh);
 
   if (mirrored) {
     ctx.translate(dx + dw, dy);
