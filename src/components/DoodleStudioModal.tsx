@@ -11,6 +11,11 @@ import {
   X,
 } from 'lucide-react';
 import {
+  getDemoOrderMedia,
+  updateDemoOrder,
+  updateDemoOrderDoodleMedia,
+} from '../services/demoStore';
+import {
   fetchOrderMediaDataUrl,
   saveOrderDoodleResult,
 } from '../services/firestoreService';
@@ -23,8 +28,9 @@ import {
 
 interface DoodleStudioModalProps {
   order: PhotoboothOrder;
+  useCloud: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (finalPngDataUrl: string) => void;
 }
 
 type ToolMode = 'pen' | 'eraser' | 'sticker';
@@ -49,6 +55,7 @@ const BRUSH_SIZES = [
 
 export function DoodleStudioModal({
   order,
+  useCloud,
   onClose,
   onSaved,
 }: DoodleStudioModalProps) {
@@ -80,25 +87,39 @@ export function DoodleStudioModal({
   useEffect(() => {
     let cancelled = false;
     setLoadingOriginal(true);
-    fetchOrderMediaDataUrl(order.id, 'original', order.originalChunks)
-      .then((url) => {
-        if (!cancelled) {
-          setOriginalUrl(url || order.previewThumbUrl || null);
+
+    const loadOriginal = async () => {
+      try {
+        const localMedia = await getDemoOrderMedia(order.id);
+        if (localMedia?.fullCompositePng) {
+          if (!cancelled) setOriginalUrl(localMedia.fullCompositePng);
+          return;
         }
-      })
-      .catch(() => {
+        if (useCloud) {
+          const url = await fetchOrderMediaDataUrl(order.id, 'original', order.originalChunks);
+          if (!cancelled) {
+            setOriginalUrl(url || order.previewThumbUrl || null);
+            return;
+          }
+        }
         if (!cancelled) {
           setOriginalUrl(order.previewThumbUrl || null);
         }
-      })
-      .finally(() => {
+      } catch {
+        if (!cancelled) {
+          setOriginalUrl(order.previewThumbUrl || null);
+        }
+      } finally {
         if (!cancelled) setLoadingOriginal(false);
-      });
+      }
+    };
+
+    loadOriginal();
 
     return () => {
       cancelled = true;
     };
-  }, [order.id, order.originalChunks, order.previewThumbUrl]);
+  }, [order.id, order.originalChunks, order.previewThumbUrl, useCloud]);
 
   const pushHistory = () => {
     const canvas = drawCanvasRef.current;
@@ -283,11 +304,21 @@ export function DoodleStudioModal({
         uploadedOverlayUrl
       );
 
-      await saveOrderDoodleResult(order, fullPngDataUrl, previewThumbUrl);
-      onSaved();
+      await updateDemoOrderDoodleMedia(order.id, fullPngDataUrl);
+      updateDemoOrder(order.id, {
+        doodleDone: true,
+        previewThumbUrl,
+        finalChunks: 1,
+        workflowStatus: order.wantsPrint ? 'Ready to Print' : 'Ready for Download',
+      });
+
+      if (useCloud) {
+        await saveOrderDoodleResult(order, fullPngDataUrl, previewThumbUrl);
+      }
+      onSaved(fullPngDataUrl);
     } catch (err) {
       console.error(err);
-      setSaveError('Gagal menyimpan hasil doodle ke cloud. Silakan coba lagi.');
+      setSaveError('Gagal menyimpan hasil doodle. Silakan coba lagi.');
     } finally {
       setIsSaving(false);
     }

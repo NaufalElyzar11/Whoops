@@ -124,8 +124,22 @@ export interface PhotoboothOrder {
   originalChunks: number;
   finalChunks: number;
   doodleDone: boolean;
+  gdriveFolderUrl?: string;
+  gdriveFolderId?: string;
+  gdriveUploadedCount?: number;
   createdAt?: unknown;
   updatedAt?: unknown;
+}
+
+export interface RawPhotoPayload {
+  filename: string;
+  dataUrl: string;
+}
+
+export interface GoogleDriveConfig {
+  webAppUrl: string;
+  secretKey: string;
+  rootFolderId: string;
 }
 
 export type AppMode = 'booth' | 'admin';

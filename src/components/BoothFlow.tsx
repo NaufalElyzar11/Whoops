@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
+  createDemoOrder,
+  subscribeDemoState,
+} from '../services/demoStore';
+import {
   createPhotoboothOrder,
   subscribeSingleOrder,
 } from '../services/firestoreService';
@@ -48,7 +52,6 @@ interface BoothFlowProps {
   onOrderSubmittedChange: (submitted: boolean) => void;
   onResetSessionTimer: () => void;
   onSelectedPackageChange: (pkgName: string | null) => void;
-  onOpenAdmin: () => void;
 }
 
 const createInitialAssignments = (): SlotAssignment[] =>
@@ -76,7 +79,6 @@ export function BoothFlow({
   onOrderSubmittedChange,
   onResetSessionTimer,
   onSelectedPackageChange,
-  onOpenAdmin,
 }: BoothFlowProps) {
   const [selectedPkgId, setSelectedPkgId] = useState<string | null>(null);
   const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
@@ -206,7 +208,7 @@ export function BoothFlow({
     };
   }, [step, isSessionExpired, cameraRetryTick, stopCamera]);
 
-  // Keep ticket order status synced when order is submitted
+  // Keep ticket order status synced from both local Demo Store and Cloud Firestore
   useEffect(() => {
     if (!currentOrderId) {
       setLiveOrder(null);
@@ -214,11 +216,32 @@ export function BoothFlow({
       return;
     }
     onOrderSubmittedChange(true);
-    const unsub = subscribeSingleOrder(currentOrderId, (ord) => {
-      setLiveOrder(ord);
+
+    const mergeLiveOrder = (incoming: PhotoboothOrder | null) => {
+      if (!incoming) return;
+      setLiveOrder((prev) => {
+        if (prev?.paymentStatus === 'VERIFIED' && incoming.paymentStatus !== 'VERIFIED') {
+          return prev;
+        }
+        return incoming;
+      });
+    };
+
+    const unsubDemo = subscribeDemoState((state) => {
+      const found = state.orders.find((o) => o.id === currentOrderId) || null;
+      mergeLiveOrder(found);
     });
-    return () => unsub();
-  }, [currentOrderId, onOrderSubmittedChange]);
+    const unsubCloud = catalogSynced
+      ? subscribeSingleOrder(currentOrderId, (ord) => {
+          mergeLiveOrder(ord);
+        })
+      : () => {};
+
+    return () => {
+      unsubDemo();
+      unsubCloud();
+    };
+  }, [currentOrderId, catalogSynced, onOrderSubmittedChange]);
 
   const resetAllSessionState = useCallback(() => {
     stopCamera();
@@ -495,22 +518,50 @@ export function BoothFlow({
     const totalAmount = Math.max(0, subtotal - discountAmount);
     const notesWithVoucher = appendVoucherNote(doodleNotes, appliedVoucher, discountAmount);
 
+    const orderId = `ord-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const orderCode = `WHP-${Math.floor(1000 + Math.random() * 9000)}`;
+    const rawPhotosPayload = photos.map((photo, idx) => ({
+      filename: `Pose-${String(idx + 1).padStart(2, '0')}.jpg`,
+      dataUrl: photo.dataUrl,
+    }));
+
     try {
-      const orderId = await createPhotoboothOrder({
+      await createDemoOrder({
+        orderId,
+        orderCode,
         pkg: pkgToSubmit,
         frameId: frameToSubmit.id,
         wantsPrint: effectivePrint,
         doodleNotes: notesWithVoucher,
         totalAmount,
-        fullPngDataUrl: finalCompositePng,
         previewThumbUrl,
+        fullPngDataUrl: finalCompositePng,
+        rawPhotos: rawPhotosPayload,
       });
+
+      if (catalogSynced) {
+        try {
+          await createPhotoboothOrder({
+            orderId,
+            orderCode,
+            pkg: pkgToSubmit,
+            frameId: frameToSubmit.id,
+            wantsPrint: effectivePrint,
+            doodleNotes: notesWithVoucher,
+            totalAmount,
+            fullPngDataUrl: finalCompositePng,
+            previewThumbUrl,
+            rawPhotos: rawPhotosPayload,
+          });
+        } catch (cloudErr) {
+          console.warn('Cloud Firestore sync skipped/failed, local demo order active:', cloudErr);
+        }
+      }
+
       setCurrentOrderId(orderId);
     } catch (err) {
       console.error(err);
-      setOrderError(
-        'Gagal mengirim pesanan ke server cloud. Pastikan katalog paket & frame sudah diinisialisasi di Admin Dashboard.'
-      );
+      setOrderError('Gagal menyimpan pesanan & foto ke antrean kasir. Silakan coba lagi.');
     } finally {
       setIsSubmittingOrder(false);
     }
@@ -532,7 +583,6 @@ export function BoothFlow({
           activeFrames={activeFrames}
           selectedFrameId={selectedFrameId}
           onSelectFrame={handleChooseFrame}
-          onOpenAdmin={onOpenAdmin}
         />
       );
     }
@@ -638,13 +688,11 @@ export function BoothFlow({
           onRemoveVoucher={() => setAppliedVoucherCode(null)}
           settings={settings}
           finalCompositePng={finalCompositePng}
-          catalogSynced={catalogSynced}
           isSubmittingOrder={isSubmittingOrder}
           orderError={orderError}
           currentOrderId={currentOrderId}
           liveOrder={liveOrder}
           onSubmitOrder={handleSubmitOrder}
-          onOpenAdmin={onOpenAdmin}
           onResetBoothNow={handleResetToWelcome}
         />
       );

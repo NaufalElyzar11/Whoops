@@ -133,7 +133,7 @@ export function WelcomeStep({ activeFrames, onStartSession }: WelcomeStepProps) 
               </motion.div>
             ) : (
               <div className="whoops-card-sm p-6 text-center text-xs text-[#61433B]">
-                Belum ada frame aktif. Aktifkan minimal 1 frame di Admin Dashboard.
+                Belum ada frame aktif saat ini. Hubungi penjaga booth untuk bantuan.
               </div>
             )}
           </div>

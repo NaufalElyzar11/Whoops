@@ -1,8 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { signInWithPopup, signOut, type User } from 'firebase/auth';
 import {
   CheckCircle2,
+  CloudUpload,
+  Copy,
   Download,
+  ExternalLink,
+  FolderOpen,
+  HelpCircle,
   Loader2,
   LogIn,
   LogOut,
@@ -16,11 +21,26 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import { getAdminAccessUrl, getBoothBaseUrl } from '../App';
 import { formatOrderTime, rupiah } from '../constants/defaults';
 import { auth, googleProvider } from '../firebase';
 import {
+  deleteDemoPackage,
+  getDemoOrderMedia,
+  getGDriveConfig,
+  getOrderGDriveLinkMap,
+  saveDemoFrame,
+  saveDemoPackage,
+  saveDemoSettings,
+  saveGDriveConfig,
+  saveOrderGDriveLink,
+  updateDemoOrder,
+  type OrderGDriveLinkInfo,
+} from '../services/demoStore';
+import {
   deletePackage,
   fetchOrderMediaDataUrl,
+  fetchOrderRawPhotos,
   markOrderPrinted,
   rejectOrderPayment,
   saveFrame,
@@ -31,11 +51,18 @@ import {
   updateOrderWorkflow,
   verifyOrderPayment,
 } from '../services/firestoreService';
+import {
+  testGoogleAppsScriptConnection,
+  uploadDoodleToGoogleDrive,
+  uploadOrderToGoogleDrive,
+} from '../services/googleDriveService';
 import type {
   AdminTab,
   DiscountType,
+  GoogleDriveConfig,
   PhotoFrame,
   PhotoboothOrder,
+  RawPhotoPayload,
   ServicePackage,
   StoreSettings,
   VoucherCode,
@@ -53,6 +80,11 @@ import { OrderQrModal } from './OrderQrModal';
 interface AdminDashboardProps {
   user: User | null;
   authLoading: boolean;
+  adminUsingCloud: boolean;
+  cloudAccessDenied: boolean;
+  onResetCloudAccessDenied: () => void;
+  onCloudAccessDenied: () => void;
+  demoOrders: PhotoboothOrder[];
   packages: ServicePackage[];
   vouchers: VoucherCode[];
   frames: PhotoFrame[];
@@ -72,14 +104,19 @@ const WORKFLOW_OPTIONS: WorkflowStatus[] = [
 export function AdminDashboard({
   user,
   authLoading,
+  adminUsingCloud,
+  cloudAccessDenied,
+  onResetCloudAccessDenied,
+  onCloudAccessDenied,
+  demoOrders,
   packages,
   vouchers,
   frames,
   settings,
 }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('orders');
-  const [orders, setOrders] = useState<PhotoboothOrder[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [cloudOrders, setCloudOrders] = useState<PhotoboothOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
 
@@ -89,6 +126,24 @@ export function AdminDashboard({
   const [activeQrOrder, setActiveQrOrder] = useState<PhotoboothOrder | null>(null);
   const [downloadingOrderId, setDownloadingOrderId] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [copiedLinkKind, setCopiedLinkKind] = useState<'admin' | 'booth' | null>(null);
+
+  // Google Drive Apps Script Config & Upload State
+  const [gdriveConfig, setGdriveConfig] = useState<GoogleDriveConfig>(() => getGDriveConfig());
+  const [gdriveUrlDraft, setGdriveUrlDraft] = useState(gdriveConfig.webAppUrl);
+  const [gdriveSecretDraft, setGdriveSecretDraft] = useState(gdriveConfig.secretKey);
+  const [gdriveRootFolderDraft, setGdriveRootFolderDraft] = useState(gdriveConfig.rootFolderId);
+  const [gdriveLinkMap, setGdriveLinkMap] = useState<Record<string, OrderGDriveLinkInfo>>(() =>
+    getOrderGDriveLinkMap()
+  );
+  const [isTestingGdrive, setIsTestingGdrive] = useState(false);
+  const [gdriveTestStatus, setGdriveTestStatus] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+  const [uploadingGdriveOrderId, setUploadingGdriveOrderId] = useState<string | null>(null);
+  const [gdriveUploadError, setGdriveUploadError] = useState<string | null>(null);
+  const [showAppsScriptGuide, setShowAppsScriptGuide] = useState(false);
 
   // Settings & package local editing buffers
   const [printAddonDraft, setPrintAddonDraft] = useState<number>(settings.printAddonPrice);
@@ -138,8 +193,8 @@ export function AdminDashboard({
   }, [vouchers]);
 
   useEffect(() => {
-    if (!user) {
-      setOrders([]);
+    if (!user || !adminUsingCloud) {
+      setCloudOrders([]);
       setOrdersLoading(false);
       return;
     }
@@ -151,30 +206,45 @@ export function AdminDashboard({
     seedInitialCatalogIfEmpty()
       .then(() => {
         unsub = subscribeOrders((list) => {
-          setOrders(list);
+          setCloudOrders(list);
           setOrdersLoading(false);
         });
       })
       .catch(() => {
         setAccessError(
-          `Akun ${user.email} tidak memiliki izin Admin di Firestore. Masuk menggunakan akun Google Admin studio.`
+          `Akun ${user.email} tidak memiliki izin Admin di Firestore. Dashboard tetap berjalan di Mode Demo Lokal.`
         );
+        onCloudAccessDenied();
         setOrdersLoading(false);
       });
 
     return () => {
       if (unsub) unsub();
     };
-  }, [user]);
+  }, [user, adminUsingCloud, onCloudAccessDenied]);
 
   const handleGoogleLogin = async () => {
     setAuthError(null);
+    onResetCloudAccessDenied();
     try {
       await signInWithPopup(auth, googleProvider);
+      setAccessError(null);
     } catch (err) {
       console.error('Login error:', err);
       setAuthError('Gagal masuk dengan Google. Pastikan pop-up diizinkan pada browser.');
     }
+  };
+
+  const handleCopyQuickUrl = (kind: 'admin' | 'booth') => {
+    const url = kind === 'admin' ? getAdminAccessUrl() : getBoothBaseUrl();
+    navigator.clipboard?.writeText(url);
+    setCopiedLinkKind(kind);
+    window.setTimeout(() => setCopiedLinkKind(null), 2000);
+    showToast(
+      kind === 'admin'
+        ? 'Link khusus Admin disalin! Simpan link ini di perangkat kasir.'
+        : 'Link Booth iPad disalin!'
+    );
   };
 
   const handleDownloadHighRes = async (
@@ -184,12 +254,23 @@ export function AdminDashboard({
   ) => {
     setDownloadingOrderId(order.id);
     try {
-      const count = kind === 'final' ? order.finalChunks : order.originalChunks;
-      const dataUrl =
-        (await fetchOrderMediaDataUrl(order.id, kind, count)) || order.previewThumbUrl;
-      if (!dataUrl) return;
+      const localMedia = await getDemoOrderMedia(order.id);
+      let dataUrl: string | null = null;
+      if (localMedia) {
+        dataUrl =
+          kind === 'final'
+            ? localMedia.doodleFinalPng || localMedia.fullCompositePng
+            : localMedia.fullCompositePng;
+      }
+      if (!dataUrl && adminUsingCloud) {
+        const count = kind === 'final' ? order.finalChunks : order.originalChunks;
+        dataUrl = await fetchOrderMediaDataUrl(order.id, kind, count);
+      }
+      const resolvedUrl = dataUrl || order.previewThumbUrl;
+      if (!resolvedUrl) return;
+
       const a = document.createElement('a');
-      a.href = dataUrl;
+      a.href = resolvedUrl;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
@@ -199,17 +280,226 @@ export function AdminDashboard({
     }
   };
 
+  const persistSettings = async (nextSettings: StoreSettings) => {
+    saveDemoSettings(nextSettings);
+    if (adminUsingCloud) {
+      await saveStoreSettings(nextSettings);
+    }
+  };
+
+  const persistPackage = async (pkg: ServicePackage) => {
+    saveDemoPackage(pkg);
+    if (adminUsingCloud) {
+      await savePackage(pkg);
+    }
+  };
+
+  const persistDeletePackage = async (packageId: string) => {
+    deleteDemoPackage(packageId);
+    if (adminUsingCloud) {
+      await deletePackage(packageId);
+    }
+  };
+
+  const persistFrame = async (frame: PhotoFrame) => {
+    saveDemoFrame(frame);
+    if (adminUsingCloud) {
+      await saveFrame(frame);
+    }
+  };
+
+  const triggerUploadOrderToGdrive = async (targetOrder: PhotoboothOrder) => {
+    if (!gdriveConfig.webAppUrl.trim()) return;
+
+    setUploadingGdriveOrderId(targetOrder.id);
+    setGdriveUploadError(null);
+    try {
+      const localMedia = await getDemoOrderMedia(targetOrder.id);
+      let composite4RPng: string | null = localMedia
+        ? targetOrder.doodleDone
+          ? localMedia.doodleFinalPng || localMedia.fullCompositePng
+          : localMedia.fullCompositePng
+        : null;
+      let rawPhotos: RawPhotoPayload[] = localMedia?.rawPhotos || [];
+
+      if ((!composite4RPng || rawPhotos.length === 0) && adminUsingCloud) {
+        if (!composite4RPng) {
+          const kind =
+            targetOrder.doodleDone && targetOrder.finalChunks > 0 ? 'final' : 'original';
+          const chunks =
+            kind === 'final' ? targetOrder.finalChunks : targetOrder.originalChunks;
+          composite4RPng = await fetchOrderMediaDataUrl(targetOrder.id, kind, chunks);
+        }
+        if (rawPhotos.length === 0) {
+          rawPhotos = await fetchOrderRawPhotos(targetOrder.id);
+        }
+      }
+
+      if (!composite4RPng) {
+        composite4RPng = targetOrder.previewThumbUrl || null;
+      }
+
+      const existingInfo = gdriveLinkMap[targetOrder.id];
+      const existingFolderId =
+        targetOrder.gdriveFolderId || existingInfo?.folderId || undefined;
+
+      const uploaded = await uploadOrderToGoogleDrive(
+        gdriveConfig,
+        targetOrder,
+        composite4RPng,
+        rawPhotos,
+        existingFolderId
+      );
+
+      const nextMap = saveOrderGDriveLink(targetOrder.id, uploaded);
+      setGdriveLinkMap(nextMap);
+      updateDemoOrder(targetOrder.id, {
+        gdriveFolderId: uploaded.folderId,
+        gdriveFolderUrl: uploaded.folderUrl,
+        gdriveUploadedCount: uploaded.fileCount,
+      });
+
+      setActiveQrOrder((prev) =>
+        prev && prev.id === targetOrder.id
+          ? {
+              ...prev,
+              gdriveFolderId: uploaded.folderId,
+              gdriveFolderUrl: uploaded.folderUrl,
+              gdriveUploadedCount: uploaded.fileCount,
+            }
+          : prev
+      );
+      showToast(
+        `${uploaded.fileCount} file (mentah + 4R) terunggah ke Google Drive (${targetOrder.orderCode}).`
+      );
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : 'Gagal mengupload foto ke Google Drive.';
+      setGdriveUploadError(msg);
+      showToast(`Upload Google Drive gagal: ${msg}`);
+    } finally {
+      setUploadingGdriveOrderId(null);
+    }
+  };
+
+  const handleVerifyAndOpenQr = async (order: PhotoboothOrder) => {
+    try {
+      const nextWorkflow: WorkflowStatus = order.includesDoodle
+        ? 'Waiting for Doodle'
+        : order.wantsPrint
+          ? 'Ready to Print'
+          : 'Ready for Download';
+
+      updateDemoOrder(order.id, {
+        paymentStatus: 'VERIFIED',
+        workflowStatus: nextWorkflow,
+      });
+
+      if (adminUsingCloud) {
+        await verifyOrderPayment(order);
+      }
+
+      const verifiedOrder: PhotoboothOrder = {
+        ...order,
+        paymentStatus: 'VERIFIED',
+        workflowStatus: nextWorkflow,
+      };
+      setGdriveUploadError(null);
+      setActiveQrOrder(verifiedOrder);
+      showToast(`Pesanan ${order.orderCode} terverifikasi.`);
+
+      if (gdriveConfig.webAppUrl.trim() && !verifiedOrder.gdriveFolderUrl) {
+        void triggerUploadOrderToGdrive(verifiedOrder);
+      }
+    } catch {
+      showToast(`Gagal memverifikasi pesanan ${order.orderCode}.`);
+    }
+  };
+
+  const handleRejectOrder = async (order: PhotoboothOrder) => {
+    try {
+      updateDemoOrder(order.id, {
+        paymentStatus: 'REJECTED',
+        workflowStatus: 'Completed',
+      });
+      if (adminUsingCloud) {
+        await rejectOrderPayment(order.id);
+      }
+      showToast(`Pesanan ${order.orderCode} ditolak.`);
+    } catch {
+      showToast(`Gagal menolak pesanan ${order.orderCode}.`);
+    }
+  };
+
+  const handleWorkflowChange = async (orderId: string, workflowStatus: WorkflowStatus) => {
+    updateDemoOrder(orderId, { workflowStatus });
+    if (adminUsingCloud) {
+      await updateOrderWorkflow(orderId, workflowStatus);
+    }
+  };
+
+  const handleMarkPrinted = async (order: PhotoboothOrder) => {
+    try {
+      updateDemoOrder(order.id, {
+        printStatus: 'PRINTED',
+        workflowStatus: 'Completed',
+      });
+      if (adminUsingCloud) {
+        await markOrderPrinted(order.id);
+      }
+      showToast(`Pesanan ${order.orderCode} ditandai sudah dicetak.`);
+    } catch {
+      showToast(`Gagal memperbarui status cetak ${order.orderCode}.`);
+    }
+  };
+
+  const handleSaveGdriveConfig = (e: React.FormEvent) => {
+    e.preventDefault();
+    const next: GoogleDriveConfig = {
+      webAppUrl: gdriveUrlDraft.trim(),
+      secretKey: gdriveSecretDraft.trim(),
+      rootFolderId: gdriveRootFolderDraft.trim(),
+    };
+    saveGDriveConfig(next);
+    setGdriveConfig(next);
+    setGdriveTestStatus(null);
+    showToast('Konfigurasi Google Apps Script tersimpan.');
+  };
+
+  const handleTestGdriveConnection = async () => {
+    const candidate: GoogleDriveConfig = {
+      webAppUrl: gdriveUrlDraft.trim(),
+      secretKey: gdriveSecretDraft.trim(),
+      rootFolderId: gdriveRootFolderDraft.trim(),
+    };
+    saveGDriveConfig(candidate);
+    setGdriveConfig(candidate);
+    setIsTestingGdrive(true);
+    setGdriveTestStatus(null);
+    try {
+      const msg = await testGoogleAppsScriptConnection(candidate);
+      setGdriveTestStatus({ ok: true, message: msg });
+    } catch (err) {
+      setGdriveTestStatus({
+        ok: false,
+        message: err instanceof Error ? err.message : 'Koneksi gagal.',
+      });
+    } finally {
+      setIsTestingGdrive(false);
+    }
+  };
+
   const handleSaveSettings = async () => {
     setSavingId('settings');
     try {
-      await saveStoreSettings({
+      await persistSettings({
         ...settings,
         printAddonPrice: printAddonDraft,
         qrisLabel: qrisLabelDraft,
       });
       showToast('Pengaturan harga cetak & QRIS tersimpan.');
     } catch {
-      showToast('Gagal menyimpan pengaturan ke Firestore.');
+      showToast('Gagal menyimpan pengaturan harga & QRIS.');
     } finally {
       setSavingId(null);
     }
@@ -220,7 +510,7 @@ export function AdminDashboard({
     if (!draft) return;
     setSavingId(pkgId);
     try {
-      await savePackage(draft);
+      await persistPackage(draft);
       showToast(`Paket "${draft.name}" berhasil diperbarui.`);
     } catch {
       showToast(`Gagal memperbarui paket "${draft.name}".`);
@@ -261,7 +551,7 @@ export function AdminDashboard({
         description: newVoucherDesc.trim(),
         isActive: true,
       };
-      await savePackage(voucherToPackage(voucher, 900 + vouchers.length));
+      await persistPackage(voucherToPackage(voucher, 900 + vouchers.length));
       setNewVoucherCode('');
       setNewVoucherDesc('');
       showToast(`Voucher "${cleanCode}" (${formatVoucherBenefit(voucher)}) dibuat.`);
@@ -287,7 +577,7 @@ export function AdminDashboard({
     setSavingId(voucherId);
     try {
       const normalized = { ...draft, code: cleanCode };
-      await savePackage(voucherToPackage(normalized));
+      await persistPackage(voucherToPackage(normalized));
       showToast(`Voucher "${cleanCode}" diperbarui.`);
     } catch {
       showToast(`Gagal memperbarui voucher "${cleanCode}".`);
@@ -299,7 +589,7 @@ export function AdminDashboard({
   const handleDeleteVoucher = async (voucher: VoucherCode) => {
     setSavingId(voucher.id);
     try {
-      await deletePackage(voucher.id);
+      await persistDeletePackage(voucher.id);
       setConfirmDeleteVoucherId(null);
       showToast(`Voucher "${voucher.code}" dihapus.`);
     } catch {
@@ -319,7 +609,7 @@ export function AdminDashboard({
     setSavingId('new-frame');
     try {
       const id = `f-${Date.now()}`;
-      await saveFrame({
+      await persistFrame({
         id,
         name: newFrameName.trim(),
         category: newFrameCategory.trim() || 'Custom',
@@ -335,7 +625,7 @@ export function AdminDashboard({
       setNewFrameOverlayData('');
       showToast('Frame baru berhasil ditambahkan.');
     } catch {
-      showToast('Gagal menyimpan frame baru ke Firestore.');
+      showToast('Gagal menyimpan frame baru.');
     } finally {
       setSavingId(null);
     }
@@ -357,55 +647,21 @@ export function AdminDashboard({
     reader.readAsDataURL(file);
   };
 
-  if (authLoading) {
-    return (
-      <div className="whoops-card max-w-md mx-auto mt-10 p-10 text-center">
-        <Loader2 className="w-7 h-7 animate-spin text-[#6D1D3A] mx-auto mb-3" />
-        <p className="text-sm text-[#61433B]">Memeriksa sesi Admin...</p>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="whoops-card max-w-md mx-auto mt-10 p-8 text-center">
-        <h1 className="font-display font-bold text-2xl text-[#3A231E]">
-          Masuk Admin Dashboard
-        </h1>
-        <p className="text-sm text-[#61433B] mt-2 mb-6 leading-relaxed">
-          Masuk dengan akun Google Studio untuk memverifikasi QRIS, mengerjakan doodle, mengekspor cetak 4R, dan mengelola paket & frame.
-        </p>
-        {authError && (
-          <div className="mb-4 p-3 rounded-xl bg-rose-100 border border-[#6D1D3A] text-xs text-[#6D1D3A]">
-            {authError}
-          </div>
-        )}
-        <button
-          onClick={handleGoogleLogin}
-          className="whoops-btn whoops-btn-primary w-full py-3 text-sm inline-flex items-center justify-center gap-2 cursor-pointer"
-        >
-          <LogIn className="w-4 h-4" />
-          Masuk dengan Google
-        </button>
-      </div>
-    );
-  }
-
-  if (accessError) {
-    return (
-      <div className="whoops-card max-w-md mx-auto mt-10 p-8 text-center">
-        <h2 className="font-display font-bold text-2xl text-[#6D1D3A]">Akses Ditolak</h2>
-        <p className="text-sm text-[#61433B] mt-2 mb-6">{accessError}</p>
-        <button
-          onClick={() => signOut(auth)}
-          className="whoops-btn whoops-btn-secondary px-5 py-2.5 text-sm inline-flex items-center gap-2 cursor-pointer"
-        >
-          <LogOut className="w-4 h-4" />
-          Ganti Akun Google
-        </button>
-      </div>
-    );
-  }
+  const rawBaseOrders = adminUsingCloud ? cloudOrders : demoOrders;
+  const orders = useMemo(
+    () =>
+      rawBaseOrders.map((o) => {
+        const g = gdriveLinkMap[o.id];
+        if (!g && !o.gdriveFolderUrl) return o;
+        return {
+          ...o,
+          gdriveFolderId: o.gdriveFolderId || g?.folderId,
+          gdriveFolderUrl: o.gdriveFolderUrl || g?.folderUrl,
+          gdriveUploadedCount: o.gdriveUploadedCount ?? g?.fileCount,
+        };
+      }),
+    [rawBaseOrders, gdriveLinkMap]
+  );
 
   const filteredOrders = orders.filter((o) => {
     const matchesStatus = statusFilter === 'ALL' || o.paymentStatus === statusFilter;
@@ -449,17 +705,82 @@ export function AdminDashboard({
           ))}
         </div>
 
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-[#61433B] hidden sm:inline">{user.email}</span>
-          <button
-            onClick={() => signOut(auth)}
-            className="whoops-btn whoops-btn-ghost px-3 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={`px-2.5 py-1 rounded-lg border border-[#3A231E] text-[11px] font-display font-bold ${
+              adminUsingCloud
+                ? 'bg-emerald-100 text-emerald-900'
+                : 'bg-[#F3D2DB] text-[#6D1D3A]'
+            }`}
           >
-            <LogOut className="w-3.5 h-3.5" />
-            Keluar
+            {adminUsingCloud
+              ? `Cloud Sync (${user?.email || 'Admin'})`
+              : 'Mode Demo (Tanpa Login)'}
+          </span>
+
+          <button
+            type="button"
+            onClick={() => handleCopyQuickUrl('admin')}
+            className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1.5 text-[11px] inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+            title="Salin tautan khusus Admin untuk disimpan di tablet/laptop kasir"
+          >
+            <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>{copiedLinkKind === 'admin' ? 'Link Disalin!' : 'Salin Link Admin'}</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => handleCopyQuickUrl('booth')}
+            className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1.5 text-[11px] inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+            title="Salin tautan Booth iPad (tanpa tombol Admin)"
+          >
+            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>{copiedLinkKind === 'booth' ? 'Disalin!' : 'Link Booth'}</span>
+          </button>
+
+          {adminUsingCloud ? (
+            <button
+              type="button"
+              onClick={() => signOut(auth)}
+              className="whoops-btn whoops-btn-ghost px-3 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Keluar</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={authLoading}
+              onClick={handleGoogleLogin}
+              className="whoops-btn whoops-btn-secondary px-3 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              title="Opsional: masuk akun Google Admin jika ingin sync 2 perangkat berbeda"
+            >
+              <LogIn className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>
+                {cloudAccessDenied ? 'Ganti Akun Google' : 'Hubungkan Google (Sync)'}
+              </span>
+            </button>
+          )}
         </div>
       </div>
+
+      {(authError || accessError) && (
+        <div className="whoops-card-sm px-4 py-2.5 bg-amber-50 border-[#3A231E] text-xs text-[#3A231E] flex flex-wrap items-center justify-between gap-2">
+          <span>{accessError || authError}</span>
+          {user && cloudAccessDenied && (
+            <button
+              type="button"
+              onClick={() => {
+                setAccessError(null);
+                void signOut(auth);
+              }}
+              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1 text-[11px] cursor-pointer"
+            >
+              Putus Akun Ini
+            </button>
+          )}
+        </div>
+      )}
 
       {toastMsg && (
         <div className="whoops-card-sm px-4 py-2.5 bg-emerald-50 text-emerald-900 text-xs font-medium flex items-center gap-2">
@@ -511,29 +832,14 @@ export function AdminDashboard({
               <div className="flex flex-wrap gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={async () => {
-                    try {
-                      await verifyOrderPayment(latestPendingOrder);
-                      showToast(`Pesanan terbaru ${latestPendingOrder.orderCode} terverifikasi.`);
-                      setActiveQrOrder({ ...latestPendingOrder, paymentStatus: 'VERIFIED' });
-                    } catch {
-                      showToast(`Gagal memverifikasi pesanan ${latestPendingOrder.orderCode}.`);
-                    }
-                  }}
+                  onClick={() => void handleVerifyAndOpenQr(latestPendingOrder)}
                   className="whoops-btn whoops-btn-primary px-4 py-2.5 text-xs sm:text-sm cursor-pointer"
                 >
                   VERIFIKASI &amp; BUKA QR
                 </button>
                 <button
                   type="button"
-                  onClick={async () => {
-                    try {
-                      await rejectOrderPayment(latestPendingOrder.id);
-                      showToast(`Pesanan ${latestPendingOrder.orderCode} ditolak.`);
-                    } catch {
-                      showToast(`Gagal menolak pesanan ${latestPendingOrder.orderCode}.`);
-                    }
-                  }}
+                  onClick={() => void handleRejectOrder(latestPendingOrder)}
                   className="whoops-btn whoops-btn-ghost px-3.5 py-2.5 text-xs cursor-pointer"
                 >
                   TOLAK
@@ -595,7 +901,7 @@ export function AdminDashboard({
                 {ordersLoading ? (
                   <tr>
                     <td colSpan={6} className="py-10 text-center text-[#61433B]">
-                      Memuat pesanan dari Firestore...
+                      Memuat daftar pesanan...
                     </td>
                   </tr>
                 ) : filteredOrders.length === 0 ? (
@@ -671,43 +977,45 @@ export function AdminDashboard({
                           <div className="inline-flex gap-1.5">
                             <button
                               type="button"
-                              onClick={async () => {
-                                try {
-                                  await verifyOrderPayment(o);
-                                  showToast(`Pesanan ${o.orderCode} terverifikasi.`);
-                                  setActiveQrOrder({ ...o, paymentStatus: 'VERIFIED' });
-                                } catch {
-                                  showToast(`Gagal memverifikasi pesanan ${o.orderCode}.`);
-                                }
-                              }}
+                              onClick={() => void handleVerifyAndOpenQr(o)}
                               className="whoops-btn whoops-btn-primary whoops-btn-compact px-2.5 py-1 text-[11px] cursor-pointer"
                             >
                               VERIFIKASI
                             </button>
                             <button
                               type="button"
-                              onClick={async () => {
-                                try {
-                                  await rejectOrderPayment(o.id);
-                                  showToast(`Pesanan ${o.orderCode} ditolak.`);
-                                } catch {
-                                  showToast(`Gagal menolak pesanan ${o.orderCode}.`);
-                                }
-                              }}
+                              onClick={() => void handleRejectOrder(o)}
                               className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1 text-[11px] cursor-pointer"
                             >
                               TOLAK
                             </button>
                           </div>
                         ) : o.paymentStatus === 'VERIFIED' ? (
-                          <button
-                            type="button"
-                            onClick={() => setActiveQrOrder(o)}
-                            className="whoops-btn whoops-btn-secondary whoops-btn-compact px-2.5 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
-                          >
-                            <QrCode className="w-3.5 h-3.5" aria-hidden="true" />
-                            <span>QR &amp; Hasil</span>
-                          </button>
+                          <div className="inline-flex items-center gap-1.5">
+                            {o.gdriveFolderUrl && (
+                              <a
+                                href={o.gdriveFolderUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-2 py-0.5 rounded bg-emerald-100 border border-[#3A231E]/50 text-[10px] font-display font-bold text-emerald-900 inline-flex items-center gap-1 hover:bg-emerald-200"
+                                title="Buka folder Google Drive pesanan ini"
+                              >
+                                <FolderOpen className="w-3 h-3" aria-hidden="true" />
+                                <span>GDrive</span>
+                              </a>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setGdriveUploadError(null);
+                                setActiveQrOrder(o);
+                              }}
+                              className="whoops-btn whoops-btn-secondary whoops-btn-compact px-2.5 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <QrCode className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>QR &amp; Hasil</span>
+                            </button>
+                          </div>
                         ) : (
                           <span className="text-xs text-[#61433B]">Ditolak</span>
                         )}
@@ -759,7 +1067,7 @@ export function AdminDashboard({
                       value={o.workflowStatus}
                       disabled={o.paymentStatus !== 'VERIFIED'}
                       onChange={(e) =>
-                        updateOrderWorkflow(o.id, e.target.value as WorkflowStatus)
+                        void handleWorkflowChange(o.id, e.target.value as WorkflowStatus)
                       }
                       className="w-full border-2 border-[#3A231E] rounded-xl px-2.5 py-1.5 text-xs bg-white disabled:opacity-50"
                     >
@@ -836,7 +1144,10 @@ export function AdminDashboard({
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => setActiveQrOrder(o)}
+                        onClick={() => {
+                          setGdriveUploadError(null);
+                          setActiveQrOrder(o);
+                        }}
                         className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
                         aria-label={`Tampilkan QR untuk ${o.orderCode}`}
                       >
@@ -860,14 +1171,7 @@ export function AdminDashboard({
                       </button>
                       <button
                         type="button"
-                        onClick={async () => {
-                          try {
-                            await markOrderPrinted(o.id);
-                            showToast(`Pesanan ${o.orderCode} ditandai sudah dicetak.`);
-                          } catch {
-                            showToast(`Gagal memperbarui status cetak ${o.orderCode}.`);
-                          }
-                        }}
+                        onClick={() => void handleMarkPrinted(o)}
                         disabled={o.printStatus === 'PRINTED'}
                         className="whoops-btn whoops-btn-primary whoops-btn-compact flex-1 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
                       >
@@ -1249,6 +1553,160 @@ export function AdminDashboard({
               </div>
             )}
           </div>
+
+          {/* Google Drive Apps Script Integration */}
+          <div className="whoops-card p-5 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="inline-flex items-center gap-1.5 text-xs font-display font-bold text-[#6D1D3A] mb-1">
+                  <CloudUpload className="w-4 h-4" aria-hidden="true" />
+                  <span>Google Drive Otomatis (Apps Script Web App)</span>
+                </div>
+                <h3 className="font-display font-bold text-lg text-[#3A231E]">
+                  Upload Foto Mentah + Hasil 4R ke 1 Folder GDrive
+                </h3>
+                <p className="text-xs text-[#61433B] mt-0.5">
+                  Saat penjaga kasir menekan Verifikasi, semua pose mentah &amp; foto 4R diunggah ke 1 folder Google Drive lalu QR pelanggan langsung membuka folder tersebut.
+                </p>
+              </div>
+              <span
+                className={`px-2.5 py-1 rounded-lg border border-[#3A231E] text-[11px] font-display font-bold ${
+                  gdriveConfig.webAppUrl.trim()
+                    ? 'bg-emerald-100 text-emerald-900'
+                    : 'bg-[#EFE2CE] text-[#61433B]'
+                }`}
+              >
+                {gdriveConfig.webAppUrl.trim() ? 'URL Terpasang' : 'Belum Diatur'}
+              </span>
+            </div>
+
+            <form onSubmit={handleSaveGdriveConfig} className="space-y-3">
+              <div>
+                <label
+                  htmlFor="gdrive-webapp-url"
+                  className="block text-xs font-display font-semibold mb-1"
+                >
+                  URL Web App Google Apps Script (/exec)
+                </label>
+                <input
+                  id="gdrive-webapp-url"
+                  type="url"
+                  value={gdriveUrlDraft}
+                  onChange={(e) => setGdriveUrlDraft(e.target.value)}
+                  placeholder="https://script.google.com/macros/s/.../exec"
+                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-xs font-mono-tabular bg-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="gdrive-root-folder"
+                    className="block text-xs font-display font-semibold mb-1"
+                  >
+                    ID Folder Induk GDrive (Opsional)
+                  </label>
+                  <input
+                    id="gdrive-root-folder"
+                    type="text"
+                    value={gdriveRootFolderDraft}
+                    onChange={(e) => setGdriveRootFolderDraft(e.target.value)}
+                    placeholder="Kosongkan untuk My Drive utama"
+                    className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-xs font-mono-tabular bg-white"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="gdrive-secret-key"
+                    className="block text-xs font-display font-semibold mb-1"
+                  >
+                    Secret Key Apps Script (Opsional)
+                  </label>
+                  <input
+                    id="gdrive-secret-key"
+                    type="password"
+                    value={gdriveSecretDraft}
+                    onChange={(e) => setGdriveSecretDraft(e.target.value)}
+                    placeholder="Kosongkan jika tidak pakai SCRIPT_SECRET"
+                    className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-xs bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="submit"
+                  className="whoops-btn whoops-btn-primary px-4 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>Simpan URL Apps Script</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isTestingGdrive || !gdriveUrlDraft.trim()}
+                  onClick={() => void handleTestGdriveConnection()}
+                  className="whoops-btn whoops-btn-secondary px-4 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isTestingGdrive ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                      <span>Menguji Koneksi...</span>
+                    </>
+                  ) : (
+                    <span>Tes Koneksi Google Drive</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAppsScriptGuide((prev) => !prev)}
+                  className="whoops-btn whoops-btn-ghost px-3 py-2 text-xs inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <HelpCircle className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{showAppsScriptGuide ? 'Tutup Panduan' : 'Panduan Pasang 4 Langkah'}</span>
+                </button>
+              </div>
+            </form>
+
+            {gdriveTestStatus && (
+              <div
+                className={`p-3 rounded-xl border text-xs ${
+                  gdriveTestStatus.ok
+                    ? 'bg-emerald-50 border-emerald-700 text-emerald-900'
+                    : 'bg-rose-100 border-[#6D1D3A] text-[#6D1D3A]'
+                }`}
+              >
+                {gdriveTestStatus.message}
+              </div>
+            )}
+
+            {showAppsScriptGuide && (
+              <div className="p-3.5 rounded-xl bg-[#EFE2CE]/75 border border-[#3A231E]/40 text-xs text-[#3A231E] space-y-1.5 leading-relaxed">
+                <div className="font-display font-bold">
+                  Cara Pasang Google Apps Script (Gratis, pakai akun Google Drive studio):
+                </div>
+                <ol className="list-decimal pl-4 space-y-1">
+                  <li>
+                    Buka <b>script.google.com</b> dengan akun Google Drive studio -&gt; klik <b>New project</b>.
+                  </li>
+                  <li>
+                    Hapus isi bawaan lalu tempel seluruh kode dari file{' '}
+                    <code className="px-1 py-0.5 rounded bg-white border border-[#3A231E]/25">
+                      google-apps-script/Code.gs
+                    </code>{' '}
+                    di repositori ini.
+                  </li>
+                  <li>
+                    Klik <b>Deploy -&gt; New deployment -&gt; Web app</b>, pilih{' '}
+                    <b>Execute as: Me</b> dan <b>Who has access: Anyone</b>, lalu izinkan akses Drive.
+                  </li>
+                  <li>
+                    Salin URL Web App berakhiran <code className="px-1 rounded bg-white">/exec</code>{' '}
+                    lalu tempel ke kolom di atas dan tekan <b>Tes Koneksi Google Drive</b>.
+                  </li>
+                </ol>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1365,7 +1823,7 @@ export function AdminDashboard({
                 </div>
                 <button
                   onClick={async () => {
-                    await saveFrame({ ...f, active: !f.active });
+                    await persistFrame({ ...f, active: !f.active });
                     showToast(
                       `Frame "${f.name}" ${!f.active ? 'diaktifkan' : 'dinonaktifkan'}.`
                     );
@@ -1385,10 +1843,44 @@ export function AdminDashboard({
       {activeDoodleOrder && (
         <DoodleStudioModal
           order={activeDoodleOrder}
+          useCloud={adminUsingCloud}
           onClose={() => setActiveDoodleOrder(null)}
-          onSaved={() => {
+          onSaved={async (finalPngDataUrl) => {
+            const targetOrder = activeDoodleOrder;
             setActiveDoodleOrder(null);
-            showToast('Doodle berhasil digabung dan dikirim ke pelanggan!');
+            showToast('Doodle berhasil digabung dan disimpan!');
+
+            const folderId =
+              targetOrder.gdriveFolderId || gdriveLinkMap[targetOrder.id]?.folderId;
+            if (gdriveConfig.webAppUrl.trim() && folderId) {
+              try {
+                const res = await uploadDoodleToGoogleDrive(
+                  gdriveConfig,
+                  targetOrder,
+                  folderId,
+                  finalPngDataUrl
+                );
+                const prevCount =
+                  targetOrder.gdriveUploadedCount ||
+                  gdriveLinkMap[targetOrder.id]?.fileCount ||
+                  0;
+                const totalCount = prevCount + res.fileCount;
+                const nextMap = saveOrderGDriveLink(targetOrder.id, {
+                  folderId: res.folderId,
+                  folderUrl: res.folderUrl,
+                  fileCount: totalCount,
+                });
+                setGdriveLinkMap(nextMap);
+                updateDemoOrder(targetOrder.id, {
+                  gdriveUploadedCount: totalCount,
+                });
+                showToast('File Doodle ikut ditambahkan ke folder Google Drive!');
+              } catch (err) {
+                const msg =
+                  err instanceof Error ? err.message : 'Gagal menambah file Doodle ke GDrive.';
+                showToast(msg);
+              }
+            }
           }}
         />
       )}
@@ -1396,6 +1888,10 @@ export function AdminDashboard({
       {activeQrOrder && (
         <OrderQrModal
           order={activeQrOrder}
+          gdriveConfig={gdriveConfig}
+          isUploadingGdrive={uploadingGdriveOrderId === activeQrOrder.id}
+          gdriveError={gdriveUploadError}
+          onUploadToGdrive={(ord) => void triggerUploadOrderToGdrive(ord)}
           onClose={() => setActiveQrOrder(null)}
           onDownloadHighRes={handleDownloadHighRes}
           isDownloading={downloadingOrderId === activeQrOrder.id}

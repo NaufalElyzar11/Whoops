@@ -22,6 +22,7 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import type {
   PhotoFrame,
   PhotoboothOrder,
+  RawPhotoPayload,
   ServicePackage,
   StoreSettings,
   WorkflowStatus,
@@ -193,6 +194,8 @@ export async function seedInitialCatalogIfEmpty(): Promise<void> {
 }
 
 export interface CreateOrderInput {
+  orderId?: string;
+  orderCode?: string;
   pkg: ServicePackage;
   frameId: string;
   wantsPrint: boolean;
@@ -200,11 +203,14 @@ export interface CreateOrderInput {
   totalAmount: number;
   fullPngDataUrl: string;
   previewThumbUrl: string;
+  rawPhotos?: RawPhotoPayload[];
 }
 
 export async function createPhotoboothOrder(input: CreateOrderInput): Promise<string> {
-  const orderId = `ord-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const orderCode = `WHP-${Math.floor(1000 + Math.random() * 9000)}`;
+  const orderId =
+    input.orderId || `ord-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const orderCode =
+    input.orderCode || `WHP-${Math.floor(1000 + Math.random() * 9000)}`;
   const sanitizedNotes = input.doodleNotes.trim().slice(0, 300);
 
   let chunks = chunkDataUrl(input.fullPngDataUrl, 380000);
@@ -248,11 +254,55 @@ export async function createPhotoboothOrder(input: CreateOrderInput): Promise<st
         createdAt: serverTimestamp(),
       });
     }
+
+    const validRaws = (input.rawPhotos || [])
+      .filter((r) => r.dataUrl.length > 0 && r.dataUrl.length <= 440000)
+      .slice(0, 19);
+
+    for (let i = 0; i < validRaws.length; i++) {
+      await setDoc(doc(db, 'orders', orderId, 'media', `raw_${i}`), {
+        kind: 'original',
+        index: i,
+        totalChunks: validRaws.length,
+        data: validRaws[i].dataUrl,
+        createdAt: serverTimestamp(),
+      });
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `${orderPath}/media`);
   }
 
   return orderId;
+}
+
+export async function fetchOrderRawPhotos(orderId: string): Promise<RawPhotoPayload[]> {
+  try {
+    const firstSnap = await getDoc(doc(db, 'orders', orderId, 'media', 'raw_0'));
+    if (!firstSnap.exists()) return [];
+    const firstData = firstSnap.data() as { data: string; totalChunks?: number };
+    const total = Math.max(1, Math.min(20, Number(firstData.totalChunks || 1)));
+    const results: RawPhotoPayload[] = [
+      { filename: 'Pose-01.jpg', dataUrl: firstData.data },
+    ];
+    if (total > 1) {
+      const rest = await Promise.all(
+        Array.from({ length: total - 1 }, (_, i) =>
+          getDoc(doc(db, 'orders', orderId, 'media', `raw_${i + 1}`))
+        )
+      );
+      rest.forEach((snap, idx) => {
+        if (snap.exists()) {
+          results.push({
+            filename: `Pose-${String(idx + 2).padStart(2, '0')}.jpg`,
+            dataUrl: (snap.data() as { data: string }).data,
+          });
+        }
+      });
+    }
+    return results;
+  } catch {
+    return [];
+  }
 }
 
 export async function fetchOrderMediaDataUrl(

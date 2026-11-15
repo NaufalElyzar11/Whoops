@@ -7,11 +7,15 @@ import { BoothFlow } from './components/BoothFlow';
 import { DownloadPage } from './components/DownloadPage';
 import { WhoopsLogo } from './components/WhoopsLogo';
 import {
-  DEFAULT_FRAMES,
   DEFAULT_PACKAGES,
   DEFAULT_STORE_SETTINGS,
 } from './constants/defaults';
 import { auth } from './firebase';
+import {
+  loadDemoState,
+  subscribeDemoState,
+  type DemoStoreState,
+} from './services/demoStore';
 import {
   subscribeFrames,
   subscribePackages,
@@ -53,11 +57,58 @@ function getDownloadOrderIdFromUrl(): string | null {
   }
 }
 
+function isAdminRouteFromUrl(): boolean {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const adminParam = params.get('admin');
+    const modeParam = params.get('mode');
+    if (adminParam === '1' || adminParam === 'true' || modeParam === 'admin') {
+      return true;
+    }
+    const cleanPath = window.location.pathname.replace(/\/+$/, '').toLowerCase();
+    if (cleanPath.endsWith('/admin')) {
+      return true;
+    }
+    const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+    return hash === 'admin' || hash.startsWith('admin?') || hash.startsWith('admin/');
+  } catch {
+    return false;
+  }
+}
+
+export function getBoothBaseUrl(): string {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('admin');
+    url.searchParams.delete('mode');
+    url.searchParams.delete('download');
+    if (url.pathname.replace(/\/+$/, '').toLowerCase().endsWith('/admin')) {
+      url.pathname = url.pathname.replace(/\/admin\/?$/i, '/');
+    }
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return import.meta.env.BASE_URL || '/';
+  }
+}
+
+export function getAdminAccessUrl(): string {
+  try {
+    const url = new URL(getBoothBaseUrl());
+    url.searchParams.set('admin', '1');
+    return url.toString();
+  } catch {
+    return '?admin=1';
+  }
+}
+
 export default function App() {
   const [downloadOrderId, setDownloadOrderId] = useState<string | null>(() =>
     getDownloadOrderIdFromUrl()
   );
-  const [mode, setMode] = useState<AppMode>('booth');
+  const [mode, setMode] = useState<AppMode>(() =>
+    isAdminRouteFromUrl() ? 'admin' : 'booth'
+  );
   const [step, setStep] = useState<BoothStep>('welcome');
   const [headerPkgName, setHeaderPkgName] = useState<string | null>(null);
 
@@ -69,21 +120,35 @@ export default function App() {
 
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [cloudAccessDenied, setCloudAccessDenied] = useState(false);
 
-  const [settings, setSettings] = useState<StoreSettings>(DEFAULT_STORE_SETTINGS);
+  const [demoState, setDemoState] = useState<DemoStoreState>(() => loadDemoState());
+  const [cloudSettings, setCloudSettings] = useState<StoreSettings>(DEFAULT_STORE_SETTINGS);
   const [cloudPackages, setCloudPackages] = useState<ServicePackage[]>([]);
   const [cloudFrames, setCloudFrames] = useState<PhotoFrame[]>([]);
   const [packagesSynced, setPackagesSynced] = useState(false);
   const [framesSynced, setFramesSynced] = useState(false);
 
   useEffect(() => {
+    const syncFromUrl = () => {
+      setDownloadOrderId(getDownloadOrderIdFromUrl());
+      setMode(isAdminRouteFromUrl() ? 'admin' : 'booth');
+    };
+    window.addEventListener('popstate', syncFromUrl);
+    window.addEventListener('hashchange', syncFromUrl);
+
+    const unsubDemo = subscribeDemoState((next) => {
+      setDemoState(next);
+    });
+
     const unsubAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
+      setCloudAccessDenied(false);
       setAuthLoading(false);
     });
 
     const unsubSettings = subscribeStoreSettings((s) => {
-      setSettings(s);
+      setCloudSettings(s);
     });
 
     const unsubPackages = subscribePackages((pkgs, exists) => {
@@ -97,6 +162,9 @@ export default function App() {
     });
 
     return () => {
+      window.removeEventListener('popstate', syncFromUrl);
+      window.removeEventListener('hashchange', syncFromUrl);
+      unsubDemo();
       unsubAuth();
       unsubSettings();
       unsubPackages();
@@ -166,12 +234,36 @@ export default function App() {
     );
   }
 
-  const rawPackages = packagesSynced ? cloudPackages : DEFAULT_PACKAGES;
+  const adminUsingCloud = Boolean(user && !cloudAccessDenied);
+  const preferDemoCatalog = !adminUsingCloud && demoState.hasCustomCatalog;
+
+  const settings = preferDemoCatalog ? demoState.settings : cloudSettings;
+  const rawPackages = preferDemoCatalog
+    ? demoState.packages
+    : packagesSynced
+      ? cloudPackages
+      : demoState.packages;
   const parsedPackages = rawPackages.filter((p) => !isVoucherPackage(p));
   const packages = parsedPackages.length > 0 ? parsedPackages : DEFAULT_PACKAGES;
   const vouchers = rawPackages.filter(isVoucherPackage).map(packageToVoucher);
-  const frames = framesSynced ? cloudFrames : DEFAULT_FRAMES;
+  const frames = preferDemoCatalog
+    ? demoState.frames
+    : framesSynced
+      ? cloudFrames
+      : demoState.frames;
   const catalogSynced = packagesSynced && framesSynced;
+
+  const navigateToBooth = useCallback(() => {
+    try {
+      const target = new URL(getBoothBaseUrl());
+      window.history.replaceState({}, '', target.pathname + target.search);
+    } catch {
+      // Ignore history restrictions
+    }
+    setMode('booth');
+    setStep('welcome');
+    resetSessionTimer();
+  }, [resetSessionTimer]);
 
   const isSessionExpired =
     mode === 'booth' &&
@@ -217,12 +309,21 @@ export default function App() {
 
             <WhoopsLogo
               size="sm"
-              onClick={() => {
-                setMode('booth');
-                setStep('welcome');
-                resetSessionTimer();
-              }}
+              onClick={
+                mode === 'booth'
+                  ? () => {
+                      setStep('welcome');
+                      resetSessionTimer();
+                    }
+                  : undefined
+              }
             />
+
+            {mode === 'admin' && (
+              <span className="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded-lg bg-[#F3D2DB] border border-[#3A231E] text-xs font-display font-bold text-[#6D1D3A] whitespace-nowrap">
+                Kasir &amp; Admin Panel
+              </span>
+            )}
 
             {mode === 'booth' && STEP_LABELS[step] && (
               <span className="hidden md:inline-flex items-center px-2.5 py-0.5 rounded-lg bg-[#EFE2CE] border border-[#3A231E]/40 text-xs font-display font-semibold text-[#61433B] whitespace-nowrap">
@@ -253,13 +354,15 @@ export default function App() {
                 </div>
               )}
 
-            <button
-              type="button"
-              onClick={() => setMode((m) => (m === 'booth' ? 'admin' : 'booth'))}
-              className="whoops-btn whoops-btn-secondary whoops-btn-compact px-3.5 sm:px-4 py-1.5 text-xs sm:text-sm whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {mode === 'booth' ? 'Admin Dashboard' : 'Kembali ke Booth'}
-            </button>
+            {mode === 'admin' && (
+              <button
+                type="button"
+                onClick={navigateToBooth}
+                className="whoops-btn whoops-btn-secondary whoops-btn-compact px-3.5 sm:px-4 py-1.5 text-xs sm:text-sm whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Kembali ke Booth
+              </button>
+            )}
           </div>
         </header>
 
@@ -287,12 +390,16 @@ export default function App() {
               onOrderSubmittedChange={setSessionOrderSubmitted}
               onResetSessionTimer={resetSessionTimer}
               onSelectedPackageChange={setHeaderPkgName}
-              onOpenAdmin={() => setMode('admin')}
             />
           ) : (
             <AdminDashboard
               user={user}
               authLoading={authLoading}
+              adminUsingCloud={adminUsingCloud}
+              cloudAccessDenied={cloudAccessDenied}
+              onResetCloudAccessDenied={() => setCloudAccessDenied(false)}
+              onCloudAccessDenied={() => setCloudAccessDenied(true)}
+              demoOrders={demoState.orders}
               packages={packages}
               vouchers={vouchers}
               frames={frames}

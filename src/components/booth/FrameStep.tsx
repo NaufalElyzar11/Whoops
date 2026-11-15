@@ -8,14 +8,12 @@ interface FrameStepProps {
   activeFrames: PhotoFrame[];
   selectedFrameId: string | null;
   onSelectFrame: (frame: PhotoFrame) => void;
-  onOpenAdmin: () => void;
 }
 
 export function FrameStep({
   activeFrames,
   selectedFrameId,
   onSelectFrame,
-  onOpenAdmin,
 }: FrameStepProps) {
   const [selectedCategory, setSelectedCategory] = useState<string>('Semua');
 
@@ -73,16 +71,9 @@ export function FrameStep({
           <h2 className="font-display font-bold text-xl text-[#3A231E]">
             Belum Ada Frame Aktif
           </h2>
-          <p className="text-sm text-[#61433B] mt-1 mb-5">
-            Aktifkan frame di halaman Admin Dashboard agar pelanggan dapat memilihnya di sini.
+          <p className="text-sm text-[#61433B] mt-1">
+            Silakan hubungi penjaga kasir untuk mengaktifkan pilihan frame booth.
           </p>
-          <button
-            type="button"
-            onClick={onOpenAdmin}
-            className="whoops-btn whoops-btn-secondary px-5 py-2.5 text-sm cursor-pointer"
-          >
-            Buka Admin Dashboard
-          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">

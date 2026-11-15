@@ -37,13 +37,11 @@ interface CheckoutStepProps {
   onRemoveVoucher: () => void;
   settings: StoreSettings;
   finalCompositePng: string | null;
-  catalogSynced: boolean;
   isSubmittingOrder: boolean;
   orderError: string | null;
   currentOrderId: string | null;
   liveOrder: PhotoboothOrder | null;
   onSubmitOrder: () => void;
-  onOpenAdmin: () => void;
   onResetBoothNow: () => void;
 }
 
@@ -62,13 +60,11 @@ export function CheckoutStep({
   onRemoveVoucher,
   settings,
   finalCompositePng,
-  catalogSynced,
   isSubmittingOrder,
   orderError,
   currentOrderId,
   liveOrder,
   onSubmitOrder,
-  onOpenAdmin,
   onResetBoothNow,
 }: CheckoutStepProps) {
   const [autoResetLeft, setAutoResetLeft] = useState(TICKET_AUTO_RESET_SECONDS);
@@ -540,35 +536,25 @@ export function CheckoutStep({
             </div>
           )}
 
-          {!catalogSynced ? (
-            <button
-              type="button"
-              onClick={onOpenAdmin}
-              className="whoops-btn whoops-btn-secondary w-full py-3.5 text-sm cursor-pointer"
-            >
-              Login Admin Dashboard untuk Aktifkan Cloud Sync
-            </button>
-          ) : (
-            <motion.button
-              type="button"
-              whileTap={{ scale: 0.97 }}
-              onClick={onSubmitOrder}
-              disabled={isSubmittingOrder || !effectivePkg || !finalCompositePng}
-              className="whoops-btn whoops-btn-primary w-full py-4 text-base inline-flex items-center justify-center gap-2 cursor-pointer"
-            >
-              {isSubmittingOrder ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
-                  <span>Mengirim ke Kasir...</span>
-                </>
-              ) : (
-                <>
-                  <Receipt className="w-5 h-5" aria-hidden="true" />
-                  <span>SELESAI &amp; KIRIM KE KASIR</span>
-                </>
-              )}
-            </motion.button>
-          )}
+          <motion.button
+            type="button"
+            whileTap={{ scale: 0.97 }}
+            onClick={onSubmitOrder}
+            disabled={isSubmittingOrder || !effectivePkg || !finalCompositePng}
+            className="whoops-btn whoops-btn-primary w-full py-4 text-base inline-flex items-center justify-center gap-2 cursor-pointer"
+          >
+            {isSubmittingOrder ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
+                <span>Mengirim ke Kasir...</span>
+              </>
+            ) : (
+              <>
+                <Receipt className="w-5 h-5" aria-hidden="true" />
+                <span>SELESAI &amp; KIRIM KE KASIR</span>
+              </>
+            )}
+          </motion.button>
         </div>
       </div>
     </section>
