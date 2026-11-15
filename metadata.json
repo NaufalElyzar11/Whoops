@@ -1,0 +1,6 @@
+{
+  "name": "WHOOPS! Photobooth & Admin Studio",
+  "description": "Aplikasi photobooth interaktif Korean retro 6-cut dengan pembuat doodle custom, cetak 4R 300 DPI, sinkronisasi Firebase real-time, dan unduh foto via QR code.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

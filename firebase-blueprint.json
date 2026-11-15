@@ -1,0 +1,314 @@
+{
+  "entities": {
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Global pricing and QRIS configuration for WHOOPS! Photobooth.",
+      "type": "object",
+      "properties": {
+        "printAddonPrice": {
+          "type": "number",
+          "description": "Additional fee in IDR for 4R Silky Doff print."
+        },
+        "storeName": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Display name of the photobooth studio."
+        },
+        "qrisLabel": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Static QRIS merchant label."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["printAddonPrice", "storeName", "qrisLabel", "updatedAt"]
+    },
+    "ServicePackage": {
+      "title": "ServicePackage",
+      "description": "Photobooth service package offered to customers.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 40,
+          "pattern": "^[A-Z0-9_]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "promoText": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "digitalPrice": {
+          "type": "number"
+        },
+        "includesDoodle": {
+          "type": "boolean"
+        },
+        "includesPrint": {
+          "type": "boolean"
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "sortOrder": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "code",
+        "name",
+        "description",
+        "promoText",
+        "digitalPrice",
+        "includesDoodle",
+        "includesPrint",
+        "isActive",
+        "sortOrder",
+        "updatedAt"
+      ]
+    },
+    "PhotoFrame": {
+      "title": "PhotoFrame",
+      "description": "6-cut 4R frame template (vector palette or custom PNG overlay).",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 50
+        },
+        "type": {
+          "type": "string",
+          "enum": ["vector", "image"]
+        },
+        "bg": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "trim": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "labelColor": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "overlayImageData": {
+          "type": "string",
+          "maxLength": 750000
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "sortOrder": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "name",
+        "category",
+        "type",
+        "bg",
+        "trim",
+        "labelColor",
+        "overlayImageData",
+        "active",
+        "sortOrder",
+        "updatedAt"
+      ]
+    },
+    "PhotoboothOrder": {
+      "title": "PhotoboothOrder",
+      "description": "Customer photobooth session order synced between Booth and Admin.",
+      "type": "object",
+      "properties": {
+        "orderCode": {
+          "type": "string",
+          "maxLength": 20,
+          "pattern": "^WHP-[0-9A-Z]+$"
+        },
+        "packageId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "packageName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "frameId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "includesDoodle": {
+          "type": "boolean"
+        },
+        "wantsPrint": {
+          "type": "boolean"
+        },
+        "doodleNotes": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "totalAmount": {
+          "type": "number"
+        },
+        "paymentStatus": {
+          "type": "string",
+          "enum": ["PENDING_VERIFICATION", "VERIFIED", "REJECTED"]
+        },
+        "printStatus": {
+          "type": "string",
+          "enum": ["NOT_APPLICABLE", "QUEUED", "PRINTED"]
+        },
+        "workflowStatus": {
+          "type": "string",
+          "enum": [
+            "Waiting for Payment",
+            "Waiting for Doodle",
+            "In Progress",
+            "Doodle Completed",
+            "Ready for Download",
+            "Ready to Print",
+            "Completed",
+            "Payment Rejected"
+          ]
+        },
+        "previewThumbUrl": {
+          "type": "string",
+          "maxLength": 350000
+        },
+        "originalChunks": {
+          "type": "number"
+        },
+        "finalChunks": {
+          "type": "number"
+        },
+        "doodleDone": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "orderCode",
+        "packageId",
+        "packageName",
+        "frameId",
+        "includesDoodle",
+        "wantsPrint",
+        "doodleNotes",
+        "totalAmount",
+        "paymentStatus",
+        "printStatus",
+        "workflowStatus",
+        "previewThumbUrl",
+        "originalChunks",
+        "finalChunks",
+        "doodleDone",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "OrderMediaChunk": {
+      "title": "OrderMediaChunk",
+      "description": "Chunked 300 DPI 4R PNG base64 segment belonging to a PhotoboothOrder.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["original", "final"]
+        },
+        "index": {
+          "type": "number"
+        },
+        "totalChunks": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string",
+          "maxLength": 450000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["kind", "index", "totalChunks", "data", "createdAt"]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized admin record for role verification.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["email", "role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/StoreSettings" },
+      "description": "Global studio pricing and QRIS configuration."
+    },
+    "/packages/{packageId}": {
+      "schema": { "$ref": "#/entities/ServicePackage" },
+      "description": "Photobooth service packages."
+    },
+    "/frames/{frameId}": {
+      "schema": { "$ref": "#/entities/PhotoFrame" },
+      "description": "6-cut frame templates."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/PhotoboothOrder" },
+      "description": "Customer photobooth orders synced in real time."
+    },
+    "/orders/{orderId}/media/{chunkId}": {
+      "schema": { "$ref": "#/entities/OrderMediaChunk" },
+      "description": "Chunked 300 DPI 4R PNG assets for an order."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Admin role directory."
+    }
+  }
+}

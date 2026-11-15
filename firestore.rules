@@ -1,0 +1,231 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+          request.auth.token.email == 'escincosusu11@gmail.com'
+        );
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll(['printAddonPrice', 'storeName', 'qrisLabel', 'updatedAt']) &&
+        data.keys().hasOnly(['printAddonPrice', 'storeName', 'qrisLabel', 'updatedAt']) &&
+        data.printAddonPrice is number && data.printAddonPrice >= 0 && data.printAddonPrice <= 10000000 &&
+        data.storeName is string && data.storeName.size() >= 1 && data.storeName.size() <= 80 &&
+        data.qrisLabel is string && data.qrisLabel.size() >= 1 && data.qrisLabel.size() <= 120 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPackage(data) {
+      return data.keys().hasAll([
+          'code', 'name', 'description', 'promoText', 'digitalPrice',
+          'includesDoodle', 'includesPrint', 'isActive', 'sortOrder', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'code', 'name', 'description', 'promoText', 'digitalPrice',
+          'includesDoodle', 'includesPrint', 'isActive', 'sortOrder', 'updatedAt'
+        ]) &&
+        data.code is string && data.code.size() >= 1 && data.code.size() <= 40 && data.code.matches('^[A-Z0-9_]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.description is string && data.description.size() <= 300 &&
+        data.promoText is string && data.promoText.size() <= 40 &&
+        data.digitalPrice is number && data.digitalPrice >= 0 && data.digitalPrice <= 10000000 &&
+        data.includesDoodle is bool &&
+        data.includesPrint is bool &&
+        data.isActive is bool &&
+        data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 1000 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidFrame(data) {
+      return data.keys().hasAll([
+          'name', 'category', 'type', 'bg', 'trim', 'labelColor',
+          'overlayImageData', 'active', 'sortOrder', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'name', 'category', 'type', 'bg', 'trim', 'labelColor',
+          'overlayImageData', 'active', 'sortOrder', 'updatedAt'
+        ]) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 50 &&
+        data.type in ['vector', 'image'] &&
+        data.bg is string && data.bg.size() >= 1 && data.bg.size() <= 20 &&
+        data.trim is string && data.trim.size() >= 1 && data.trim.size() <= 20 &&
+        data.labelColor is string && data.labelColor.size() >= 1 && data.labelColor.size() <= 20 &&
+        data.overlayImageData is string && data.overlayImageData.size() <= 750000 &&
+        data.active is bool &&
+        data.sortOrder is number && data.sortOrder >= 0 && data.sortOrder <= 1000 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'orderCode', 'packageId', 'packageName', 'frameId',
+          'includesDoodle', 'wantsPrint', 'doodleNotes', 'totalAmount',
+          'paymentStatus', 'printStatus', 'workflowStatus',
+          'previewThumbUrl', 'originalChunks', 'finalChunks',
+          'doodleDone', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'orderCode', 'packageId', 'packageName', 'frameId',
+          'includesDoodle', 'wantsPrint', 'doodleNotes', 'totalAmount',
+          'paymentStatus', 'printStatus', 'workflowStatus',
+          'previewThumbUrl', 'originalChunks', 'finalChunks',
+          'doodleDone', 'createdAt', 'updatedAt'
+        ]) &&
+        data.orderCode is string && data.orderCode.size() >= 4 && data.orderCode.size() <= 20 && data.orderCode.matches('^WHP-[0-9A-Z]+$') &&
+        isValidId(data.packageId) &&
+        data.packageName is string && data.packageName.size() >= 1 && data.packageName.size() <= 80 &&
+        isValidId(data.frameId) &&
+        data.includesDoodle is bool &&
+        data.wantsPrint is bool &&
+        data.doodleNotes is string && data.doodleNotes.size() <= 300 &&
+        data.totalAmount is number && data.totalAmount >= 0 && data.totalAmount <= 10000000 &&
+        data.paymentStatus in ['PENDING_VERIFICATION', 'VERIFIED', 'REJECTED'] &&
+        data.printStatus in ['NOT_APPLICABLE', 'QUEUED', 'PRINTED'] &&
+        data.workflowStatus in [
+          'Waiting for Payment', 'Waiting for Doodle', 'In Progress',
+          'Doodle Completed', 'Ready for Download', 'Ready to Print',
+          'Completed', 'Payment Rejected'
+        ] &&
+        data.previewThumbUrl is string && data.previewThumbUrl.size() <= 350000 &&
+        data.originalChunks is number && data.originalChunks >= 0 && data.originalChunks <= 20 &&
+        data.finalChunks is number && data.finalChunks >= 0 && data.finalChunks <= 20 &&
+        data.doodleDone is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidMediaChunk(data) {
+      return data.keys().hasAll(['kind', 'index', 'totalChunks', 'data', 'createdAt']) &&
+        data.keys().hasOnly(['kind', 'index', 'totalChunks', 'data', 'createdAt']) &&
+        data.kind in ['original', 'final'] &&
+        data.index is number && data.index >= 0 && data.index < 20 &&
+        data.totalChunks is number && data.totalChunks >= 1 && data.totalChunks <= 20 &&
+        data.data is string && data.data.size() >= 1 && data.data.size() <= 450000 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidAdmin(data) {
+      return data.keys().hasAll(['email', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['email', 'role', 'createdAt']) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+        data.role == 'admin' &&
+        data.createdAt is timestamp;
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create: if isValidId(settingId) && isAdmin() && isValidSettings(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isValidId(settingId) && isAdmin() && isValidSettings(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['printAddonPrice', 'storeName', 'qrisLabel', 'updatedAt']) &&
+        incoming().updatedAt == request.time;
+      allow delete: if isValidId(settingId) && isAdmin();
+    }
+
+    match /packages/{packageId} {
+      allow get: if isValidId(packageId);
+      allow list: if true;
+      allow create: if isValidId(packageId) && isAdmin() && isValidPackage(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isValidId(packageId) && isAdmin() && isValidPackage(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'code', 'name', 'description', 'promoText', 'digitalPrice',
+          'includesDoodle', 'includesPrint', 'isActive', 'sortOrder', 'updatedAt'
+        ]) &&
+        incoming().updatedAt == request.time;
+      allow delete: if isValidId(packageId) && isAdmin();
+    }
+
+    match /frames/{frameId} {
+      allow get: if isValidId(frameId);
+      allow list: if true;
+      allow create: if isValidId(frameId) && isAdmin() && isValidFrame(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isValidId(frameId) && isAdmin() && isValidFrame(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'category', 'type', 'bg', 'trim', 'labelColor',
+          'overlayImageData', 'active', 'sortOrder', 'updatedAt'
+        ]) &&
+        incoming().updatedAt == request.time;
+      allow delete: if isValidId(frameId) && isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId);
+      allow list: if isAdmin();
+      allow create: if isValidId(orderId) &&
+        isValidOrder(incoming()) &&
+        incoming().paymentStatus == 'PENDING_VERIFICATION' &&
+        incoming().workflowStatus == 'Waiting for Payment' &&
+        incoming().doodleDone == false &&
+        incoming().finalChunks == 0 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/packages/$(incoming().packageId)) &&
+        exists(/databases/$(database)/documents/frames/$(incoming().frameId));
+      allow update: if isValidId(orderId) &&
+        isAdmin() &&
+        isValidOrder(incoming()) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().orderCode == existing().orderCode &&
+        incoming().packageId == existing().packageId &&
+        incoming().frameId == existing().frameId &&
+        incoming().updatedAt == request.time &&
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'workflowStatus', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['workflowStatus', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['printStatus', 'workflowStatus', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['doodleDone', 'finalChunks', 'previewThumbUrl', 'workflowStatus', 'updatedAt'])
+        );
+      allow delete: if isValidId(orderId) && isAdmin();
+
+      match /media/{chunkId} {
+        allow get: if isValidId(orderId) && isValidId(chunkId);
+        allow list: if isAdmin();
+        allow create: if isValidId(orderId) && isValidId(chunkId) &&
+          isValidMediaChunk(incoming()) &&
+          incoming().createdAt == request.time &&
+          exists(/databases/$(database)/documents/orders/$(orderId)) &&
+          (
+            (incoming().kind == 'original' && get(/databases/$(database)/documents/orders/$(orderId)).data.paymentStatus == 'PENDING_VERIFICATION') ||
+            isAdmin()
+          );
+        allow update: if isValidId(orderId) && isValidId(chunkId) &&
+          isAdmin() &&
+          isValidMediaChunk(incoming()) &&
+          incoming().createdAt == request.time;
+        allow delete: if isValidId(orderId) && isValidId(chunkId) && isAdmin();
+      }
+    }
+
+    match /admins/{uid} {
+      allow get: if isValidId(uid) && isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create, update, delete: if isValidId(uid) && isAdmin() && isValidAdmin(incoming()) && incoming().createdAt == request.time;
+    }
+  }
+}

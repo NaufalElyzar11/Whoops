@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+:root {
+  --burgundy: #6D1D3A;
+  --burgundy-dark: #521329;
+  --dusty-pink: #E4A3B3;
+  --dusty-pink-soft: #F3D2DB;
+  --dusty-pink-deep: #C97B90;
+  --cream: #FDF7EE;
+  --beige: #EFE2CE;
+  --dark-brown: #3A231E;
+  --brown-soft: #61433B;
+}
+
+@layer base {
+  body {
+    margin: 0;
+    background-color: var(--cream);
+    color: var(--dark-brown);
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+.font-display {
+  font-family: 'Fredoka', ui-rounded, system-ui, sans-serif;
+}
+
+.font-hand {
+  font-family: 'Gaegu', cursive;
+}
+
+.font-mono-tabular {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.whoops-card {
+  background-color: var(--cream);
+  border: 2px solid var(--dark-brown);
+  border-radius: 24px;
+  box-shadow: 4px 4px 0 var(--dark-brown);
+}
+
+.whoops-card-sm {
+  background-color: var(--cream);
+  border: 2px solid var(--dark-brown);
+  border-radius: 18px;
+  box-shadow: 2px 2px 0 var(--dark-brown);
+}
+
+.whoops-btn {
+  font-family: 'Fredoka', ui-rounded, system-ui, sans-serif;
+  font-weight: 600;
+  border: 2px solid var(--dark-brown);
+  border-radius: 16px;
+  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 120ms cubic-bezier(0.16, 1, 0.3, 1), background-color 120ms ease;
+}
+
+.whoops-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--dark-brown);
+}
+
+.whoops-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.whoops-btn-primary {
+  background-color: var(--burgundy);
+  color: var(--cream);
+  box-shadow: 4px 4px 0 var(--dark-brown);
+}
+
+.whoops-btn-primary:hover:not(:disabled) {
+  background-color: var(--burgundy-dark);
+}
+
+.whoops-btn-secondary {
+  background-color: var(--dusty-pink-soft);
+  color: var(--dark-brown);
+  box-shadow: 4px 4px 0 var(--dark-brown);
+}
+
+.whoops-btn-secondary:hover:not(:disabled) {
+  background-color: var(--dusty-pink);
+}
+
+.whoops-btn-ghost {
+  background-color: var(--beige);
+  color: var(--dark-brown);
+  box-shadow: 2px 2px 0 var(--dark-brown);
+}
+
+.whoops-btn-ghost:hover:not(:disabled) {
+  background-color: #e6d5bc;
+}
