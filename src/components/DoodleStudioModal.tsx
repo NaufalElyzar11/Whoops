@@ -70,6 +70,14 @@ export function DoodleStudioModal({
   const [historyCount, setHistoryCount] = useState(0);
 
   useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoadingOriginal(true);
     fetchOrderMediaDataUrl(order.id, 'original', order.originalChunks)

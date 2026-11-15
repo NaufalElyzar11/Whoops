@@ -13,12 +13,20 @@
 }
 
 @layer base {
+  html,
   body {
     margin: 0;
     background-color: var(--cream);
     color: var(--dark-brown);
     font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Accessible high-contrast keyboard focus indicator (R-32) */
+  :focus-visible {
+    outline: 3px solid var(--burgundy);
+    outline-offset: 2px;
   }
 }
 
@@ -39,6 +47,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Warm retro studio paper surface with subtle corner vignette */
+.whoops-studio-bg {
+  background-color: var(--cream);
+  background-image:
+    radial-gradient(circle at 12% 10%, rgba(243, 210, 219, 0.36) 0%, transparent 42%),
+    radial-gradient(circle at 88% 90%, rgba(239, 226, 206, 0.55) 0%, transparent 45%);
+}
+
 .whoops-card {
   background-color: var(--cream);
   border: 2px solid var(--dark-brown);
@@ -49,16 +65,38 @@
 .whoops-card-sm {
   background-color: var(--cream);
   border: 2px solid var(--dark-brown);
-  border-radius: 18px;
+  border-radius: 16px;
   box-shadow: 2px 2px 0 var(--dark-brown);
+}
+
+/* Perforated booth receipt card for Order Code ticket */
+.whoops-ticket {
+  position: relative;
+  background-color: var(--cream);
+  border: 2px solid var(--dark-brown);
+  border-radius: 24px;
+  box-shadow: 5px 5px 0 var(--dark-brown);
 }
 
 .whoops-btn {
   font-family: 'Fredoka', ui-rounded, system-ui, sans-serif;
   font-weight: 600;
   border: 2px solid var(--dark-brown);
-  border-radius: 16px;
-  transition: transform 120ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 120ms cubic-bezier(0.16, 1, 0.3, 1), background-color 120ms ease;
+  border-radius: 15px;
+  min-height: 44px;
+  transition:
+    transform 130ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 130ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 140ms ease;
+}
+
+.whoops-btn-compact {
+  min-height: 36px;
+  border-radius: 12px;
+}
+
+.whoops-btn:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
 }
 
 .whoops-btn:active:not(:disabled) {
@@ -79,6 +117,7 @@
 
 .whoops-btn-primary:hover:not(:disabled) {
   background-color: var(--burgundy-dark);
+  box-shadow: 5px 5px 0 var(--dark-brown);
 }
 
 .whoops-btn-secondary {
@@ -89,6 +128,7 @@
 
 .whoops-btn-secondary:hover:not(:disabled) {
   background-color: var(--dusty-pink);
+  box-shadow: 5px 5px 0 var(--dark-brown);
 }
 
 .whoops-btn-ghost {
@@ -99,4 +139,29 @@
 
 .whoops-btn-ghost:hover:not(:disabled) {
   background-color: #e6d5bc;
+  box-shadow: 3px 3px 0 var(--dark-brown);
+}
+
+/* Custom studio scrollbar for the scrollable right editing column on iPad */
+.whoops-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--brown-soft) transparent;
+}
+
+.whoops-scroll::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.whoops-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.whoops-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(97, 67, 59, 0.35);
+  border-radius: 9999px;
+}
+
+.whoops-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(109, 29, 58, 0.55);
 }

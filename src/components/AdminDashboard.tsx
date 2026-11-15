@@ -9,6 +9,7 @@ import {
   PenTool,
   Plus,
   Printer,
+  QrCode,
   Save,
   Search,
   Upload,
@@ -37,6 +38,7 @@ import type {
 } from '../types';
 import { DoodleStudioModal } from './DoodleStudioModal';
 import { FramePreviewCanvas } from './FramePreviewCanvas';
+import { OrderQrModal } from './OrderQrModal';
 
 interface AdminDashboardProps {
   user: User | null;
@@ -72,6 +74,7 @@ export function AdminDashboard({
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING_VERIFICATION' | 'VERIFIED' | 'REJECTED'>('ALL');
   const [activeDoodleOrder, setActiveDoodleOrder] = useState<PhotoboothOrder | null>(null);
+  const [activeQrOrder, setActiveQrOrder] = useState<PhotoboothOrder | null>(null);
   const [downloadingOrderId, setDownloadingOrderId] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
@@ -179,6 +182,8 @@ export function AdminDashboard({
         qrisLabel: qrisLabelDraft,
       });
       showToast('Pengaturan harga cetak & QRIS tersimpan.');
+    } catch {
+      showToast('Gagal menyimpan pengaturan ke Firestore.');
     } finally {
       setSavingId(null);
     }
@@ -191,6 +196,8 @@ export function AdminDashboard({
     try {
       await savePackage(draft);
       showToast(`Paket "${draft.name}" berhasil diperbarui.`);
+    } catch {
+      showToast(`Gagal memperbarui paket "${draft.name}".`);
     } finally {
       setSavingId(null);
     }
@@ -221,6 +228,8 @@ export function AdminDashboard({
       setNewFrameName('');
       setNewFrameOverlayData('');
       showToast('Frame baru berhasil ditambahkan.');
+    } catch {
+      showToast('Gagal menyimpan frame baru ke Firestore.');
     } finally {
       setSavingId(null);
     }
@@ -301,13 +310,14 @@ export function AdminDashboard({
     return matchesStatus && matchesSearch;
   });
 
+  const pendingCount = orders.filter((o) => o.paymentStatus === 'PENDING_VERIFICATION').length;
   const doodleOrders = orders.filter((o) => o.includesDoodle);
   const printOrders = orders.filter(
     (o) => o.paymentStatus === 'VERIFIED' && o.wantsPrint
   );
 
   const tabs: { id: AdminTab; label: string }[] = [
-    { id: 'orders', label: 'Orders' },
+    { id: 'orders', label: pendingCount > 0 ? `Orders (${pendingCount})` : 'Orders' },
     { id: 'doodle', label: 'Doodle Queue & Upload' },
     { id: 'print', label: 'Print Queue' },
     { id: 'packages', label: 'Service & Packages' },
@@ -369,7 +379,7 @@ export function AdminDashboard({
               {(
                 [
                   ['ALL', 'Semua'],
-                  ['PENDING_VERIFICATION', 'Menunggu'],
+                  ['PENDING_VERIFICATION', pendingCount > 0 ? `Menunggu (${pendingCount})` : 'Menunggu'],
                   ['VERIFIED', 'Terverifikasi'],
                   ['REJECTED', 'Ditolak'],
                 ] as const
@@ -453,26 +463,46 @@ export function AdminDashboard({
                         {o.paymentStatus === 'PENDING_VERIFICATION' ? (
                           <div className="inline-flex gap-1.5">
                             <button
+                              type="button"
                               onClick={async () => {
-                                await verifyOrderPayment(o);
-                                showToast(`Pesanan ${o.orderCode} terverifikasi.`);
+                                try {
+                                  await verifyOrderPayment(o);
+                                  showToast(`Pesanan ${o.orderCode} terverifikasi.`);
+                                  setActiveQrOrder({ ...o, paymentStatus: 'VERIFIED' });
+                                } catch {
+                                  showToast(`Gagal memverifikasi pesanan ${o.orderCode}.`);
+                                }
                               }}
-                              className="whoops-btn whoops-btn-primary px-2.5 py-1 text-[11px] cursor-pointer"
+                              className="whoops-btn whoops-btn-primary whoops-btn-compact px-2.5 py-1 text-[11px] cursor-pointer"
                             >
                               VERIFIKASI
                             </button>
                             <button
+                              type="button"
                               onClick={async () => {
-                                await rejectOrderPayment(o.id);
-                                showToast(`Pesanan ${o.orderCode} ditolak.`);
+                                try {
+                                  await rejectOrderPayment(o.id);
+                                  showToast(`Pesanan ${o.orderCode} ditolak.`);
+                                } catch {
+                                  showToast(`Gagal menolak pesanan ${o.orderCode}.`);
+                                }
                               }}
-                              className="whoops-btn whoops-btn-ghost px-2.5 py-1 text-[11px] cursor-pointer"
+                              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1 text-[11px] cursor-pointer"
                             >
                               TOLAK
                             </button>
                           </div>
+                        ) : o.paymentStatus === 'VERIFIED' ? (
+                          <button
+                            type="button"
+                            onClick={() => setActiveQrOrder(o)}
+                            className="whoops-btn whoops-btn-secondary whoops-btn-compact px-2.5 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <QrCode className="w-3.5 h-3.5" aria-hidden="true" />
+                            <span>QR &amp; Hasil</span>
+                          </button>
                         ) : (
-                          <span className="text-[#61433B]">—</span>
+                          <span className="text-xs text-[#61433B]">Ditolak</span>
                         )}
                       </td>
                     </tr>
@@ -595,8 +625,18 @@ export function AdminDashboard({
                       </div>
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <button
+                        type="button"
+                        onClick={() => setActiveQrOrder(o)}
+                        className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
+                        aria-label={`Tampilkan QR untuk ${o.orderCode}`}
+                      >
+                        <QrCode className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>QR</span>
+                      </button>
+                      <button
+                        type="button"
                         onClick={() =>
                           handleDownloadHighRes(
                             o,
@@ -605,21 +645,26 @@ export function AdminDashboard({
                           )
                         }
                         disabled={downloadingOrderId === o.id}
-                        className="whoops-btn whoops-btn-secondary flex-1 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
+                        className="whoops-btn whoops-btn-secondary whoops-btn-compact flex-1 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
                       >
-                        <Download className="w-3.5 h-3.5" />
-                        Ekspor 4R
+                        <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>Ekspor 4R</span>
                       </button>
                       <button
+                        type="button"
                         onClick={async () => {
-                          await markOrderPrinted(o.id);
-                          showToast(`Pesanan ${o.orderCode} ditandai sudah dicetak.`);
+                          try {
+                            await markOrderPrinted(o.id);
+                            showToast(`Pesanan ${o.orderCode} ditandai sudah dicetak.`);
+                          } catch {
+                            showToast(`Gagal memperbarui status cetak ${o.orderCode}.`);
+                          }
                         }}
                         disabled={o.printStatus === 'PRINTED'}
-                        className="whoops-btn whoops-btn-primary flex-1 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
+                        className="whoops-btn whoops-btn-primary whoops-btn-compact flex-1 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
                       >
-                        <Printer className="w-3.5 h-3.5" />
-                        {o.printStatus === 'PRINTED' ? 'Selesai' : 'Sudah Dicetak'}
+                        <Printer className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>{o.printStatus === 'PRINTED' ? 'Selesai' : 'Sudah Dicetak'}</span>
                       </button>
                     </div>
                   </div>
@@ -911,6 +956,15 @@ export function AdminDashboard({
             setActiveDoodleOrder(null);
             showToast('Doodle berhasil digabung dan dikirim ke pelanggan!');
           }}
+        />
+      )}
+
+      {activeQrOrder && (
+        <OrderQrModal
+          order={activeQrOrder}
+          onClose={() => setActiveQrOrder(null)}
+          onDownloadHighRes={handleDownloadHighRes}
+          isDownloading={downloadingOrderId === activeQrOrder.id}
         />
       )}
     </section>

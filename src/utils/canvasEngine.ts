@@ -31,6 +31,93 @@ export function getCssFilter(filter: FilterType, brightness: number): string {
   }
 }
 
+let cachedCtxFilterSupport: boolean | null = null;
+
+// Probe whether CanvasRenderingContext2D.filter actually transforms pixels (old iPadOS Safari ignores it silently).
+function supportsCanvasFilter(): boolean {
+  if (cachedCtxFilterSupport !== null) return cachedCtxFilterSupport;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 2;
+    c.height = 2;
+    const ctx = c.getContext('2d');
+    if (!ctx || typeof ctx.filter !== 'string') {
+      cachedCtxFilterSupport = false;
+      return false;
+    }
+    ctx.filter = 'grayscale(100%)';
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, 2, 2);
+    const data = ctx.getImageData(0, 0, 1, 1).data;
+    cachedCtxFilterSupport = Math.abs(data[0] - data[1]) < 6;
+  } catch {
+    cachedCtxFilterSupport = false;
+  }
+  return cachedCtxFilterSupport;
+}
+
+function clampByte(v: number): number {
+  return v < 0 ? 0 : v > 255 ? 255 : v;
+}
+
+function applyPixelFilterFallback(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  filter: FilterType,
+  brightness: number
+) {
+  if (filter === 'original' && brightness === 0) return;
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const d = imgData.data;
+  const bFactor = Math.max(40, Math.min(160, 100 + brightness + (filter === 'bright' ? 14 : filter === 'warm' ? 3 : 0))) / 100;
+  const contrastFactor =
+    filter === 'bw' ? 1.35 : filter === 'contrast' ? 1.28 : filter === 'sepia' ? 1.05 : filter === 'cool' ? 1.04 : filter === 'bright' ? 1.02 : 1;
+
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i];
+    let g = d[i + 1];
+    let b = d[i + 2];
+
+    if (filter === 'bw' || filter === 'grayscale') {
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      r = lum;
+      g = lum;
+      b = lum;
+    } else if (filter === 'sepia') {
+      const sr = 0.393 * r + 0.769 * g + 0.189 * b;
+      const sg = 0.349 * r + 0.686 * g + 0.168 * b;
+      const sb = 0.272 * r + 0.534 * g + 0.131 * b;
+      r = r * 0.18 + sr * 0.82;
+      g = g * 0.18 + sg * 0.82;
+      b = b * 0.18 + sb * 0.82;
+    } else if (filter === 'warm') {
+      const sr = 0.393 * r + 0.769 * g + 0.189 * b;
+      const sg = 0.349 * r + 0.686 * g + 0.168 * b;
+      const sb = 0.272 * r + 0.534 * g + 0.131 * b;
+      r = r * 0.76 + sr * 0.24 + 6;
+      g = g * 0.76 + sg * 0.24 + 2;
+      b = b * 0.76 + sb * 0.24 - 6;
+    } else if (filter === 'cool') {
+      r = r * 0.94 - 4;
+      g = g * 0.98 + 2;
+      b = b * 1.06 + 8;
+    }
+
+    if (contrastFactor !== 1) {
+      r = (r - 128) * contrastFactor + 128;
+      g = (g - 128) * contrastFactor + 128;
+      b = (b - 128) * contrastFactor + 128;
+    }
+
+    d[i] = clampByte(r * bFactor);
+    d[i + 1] = clampByte(g * bFactor);
+    d[i + 2] = clampByte(b * bFactor);
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+}
+
 export function buildFrameOverlaySvg(frame: PhotoFrame): string {
   const maskId = `cutout-${frame.id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1205 1795">
@@ -73,7 +160,6 @@ export function createDemoPosePhoto(poseNum: number): string {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, c.width, c.height);
 
-  // Subtle decorative retro grid dots
   ctx.fillStyle = fg + '1A';
   for (let x = 40; x < c.width; x += 48) {
     for (let y = 40; y < c.height; y += 48) {
@@ -83,7 +169,6 @@ export function createDemoPosePhoto(poseNum: number): string {
     }
   }
 
-  // Cute smiley illustration
   ctx.fillStyle = fg;
   ctx.beginPath();
   ctx.arc(480, 310, 140, 0, Math.PI * 2);
@@ -177,6 +262,8 @@ export async function buildComposite4R(
   ctx.fillStyle = '#FFFFFF';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  const canUseCssFilter = supportsCanvasFilter();
+
   for (const s of DEFAULT_SLOTS) {
     const assign = assignments.find((a) => a.slotIndex === s.slotIndex);
     const photo = assign?.photoId ? photos.find((p) => p.id === assign.photoId) : null;
@@ -185,15 +272,31 @@ export async function buildComposite4R(
     const img = await loadImage(photo.dataUrl);
     const dx = s.x * canvas.width;
     const dy = s.y * canvas.height;
-    const dw = s.width * canvas.width;
-    const dh = s.height * canvas.height;
+    const dw = Math.round(s.width * canvas.width);
+    const dh = Math.round(s.height * canvas.height);
 
     ctx.save();
     ctx.beginPath();
     ctx.roundRect(dx, dy, dw, dh, 20);
     ctx.clip();
-    ctx.filter = getCssFilter(assign.filter, assign.brightness);
-    drawCoverImage(ctx, img, dx, dy, dw, dh, assign.mirrored);
+
+    if (canUseCssFilter) {
+      ctx.filter = getCssFilter(assign.filter, assign.brightness);
+      drawCoverImage(ctx, img, dx, dy, dw, dh, assign.mirrored);
+    } else {
+      const slotCanvas = document.createElement('canvas');
+      slotCanvas.width = dw;
+      slotCanvas.height = dh;
+      const sctx = slotCanvas.getContext('2d');
+      if (sctx) {
+        drawCoverImage(sctx, img, 0, 0, dw, dh, assign.mirrored);
+        applyPixelFilterFallback(sctx, dw, dh, assign.filter, assign.brightness);
+        ctx.drawImage(slotCanvas, dx, dy, dw, dh);
+      } else {
+        drawCoverImage(ctx, img, dx, dy, dw, dh, assign.mirrored);
+      }
+    }
+
     ctx.restore();
   }
 
@@ -213,7 +316,6 @@ export async function buildComposite4R(
     }
   }
 
-  // Export crisp 300 DPI 4R PNG (and lightweight JPEG thumb for Firestore order doc)
   const fullPngDataUrl = canvas.toDataURL('image/png');
   const previewThumbUrl = createThumbnailFromCanvas(canvas);
   return { fullPngDataUrl, previewThumbUrl };
