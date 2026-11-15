@@ -32,7 +32,7 @@ export function OrderQrModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
-  const downloadUrl = `${window.location.origin}/?download=${order.id}`;
+  const downloadUrl = `${window.location.origin}${import.meta.env.BASE_URL}?download=${encodeURIComponent(order.id)}`;
   const mediaKind = order.doodleDone && order.finalChunks > 0 ? 'final' : 'original';
 
   return (
