@@ -369,7 +369,7 @@ export function BoothFlow({
           commitCapturedDataUrl(dataUrl);
         }
       }
-    }, 900);
+    }, 1000);
   };
 
   const handleStartRetakePhoto = (photoId: string, slotNumber?: number, returnToEditor = false) => {

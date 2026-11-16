@@ -253,51 +253,49 @@ export function CameraStep({
           </AnimatePresence>
 
           {/* Animated 3-2-1 Countdown Ring */}
-          <AnimatePresence mode="wait">
-            {countdownVal !== null && (
-              <motion.div
-                key={countdownVal}
-                initial={{ opacity: 0.4, scale: 0.65 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.25 }}
-                transition={{ type: 'spring', stiffness: 420, damping: 22 }}
-                className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#3A231E]/35 pointer-events-none"
-              >
-                <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center">
-                  <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 120 120">
-                    <circle
-                      cx="60"
-                      cy="60"
-                      r="52"
-                      fill="rgba(58,35,30,0.55)"
-                      stroke="#FDF7EE"
-                      strokeWidth="4"
-                      strokeOpacity="0.3"
-                    />
-                    <motion.circle
-                      cx="60"
-                      cy="60"
-                      r="52"
-                      fill="none"
-                      stroke="#E4A3B3"
-                      strokeWidth="6"
-                      strokeLinecap="round"
-                      strokeDasharray={326.7}
-                      initial={{ strokeDashoffset: 0 }}
-                      animate={{ strokeDashoffset: 326.7 }}
-                      transition={{ duration: 0.88, ease: 'linear' }}
-                    />
-                  </svg>
-                  <span className="font-display font-bold text-6xl sm:text-7xl text-[#FDF7EE] drop-shadow-[3px_3px_0_#6D1D3A] tabular-nums">
-                    {countdownVal}
-                  </span>
-                </div>
-                <span className="mt-2 px-3 py-1 rounded-lg bg-[#6D1D3A] text-[#FDF7EE] border border-[#3A231E] text-xs font-display font-bold">
-                  {retakeTarget ? 'Siap Retake...' : 'Tahan Pose!'}
-                </span>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {countdownVal !== null && (
+            <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#3A231E]/35 pointer-events-none">
+              <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center">
+                <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 120 120">
+                  <circle
+                    cx="60"
+                    cy="60"
+                    r="52"
+                    fill="rgba(58,35,30,0.55)"
+                    stroke="#FDF7EE"
+                    strokeWidth="4"
+                    strokeOpacity="0.3"
+                  />
+                  <motion.circle
+                    key={`ring-${countdownVal}`}
+                    cx="60"
+                    cy="60"
+                    r="52"
+                    fill="none"
+                    stroke="#E4A3B3"
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    strokeDasharray={326.7}
+                    initial={{ strokeDashoffset: 0 }}
+                    animate={{ strokeDashoffset: 326.7 }}
+                    transition={{ duration: 0.95, ease: 'linear' }}
+                  />
+                </svg>
+                <motion.span
+                  key={`num-${countdownVal}`}
+                  initial={{ opacity: 0.5, scale: 0.72 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.18, ease: 'easeOut' }}
+                  className="font-display font-bold text-6xl sm:text-7xl text-[#FDF7EE] drop-shadow-[3px_3px_0_#6D1D3A] tabular-nums"
+                >
+                  {countdownVal}
+                </motion.span>
+              </div>
+              <span className="mt-2 px-3 py-1 rounded-lg bg-[#6D1D3A] text-[#FDF7EE] border border-[#3A231E] text-xs font-display font-bold">
+                {retakeTarget ? 'Siap Retake...' : 'Tahan Pose!'}
+              </span>
+            </div>
+          )}
 
           {/* Shutter Flash */}
           {shutterFlash && (
@@ -313,35 +311,41 @@ export function CameraStep({
 
         <p className="text-xs text-[#61433B] mt-2.5 mb-3">{camStatusMsg}</p>
 
-        {/* Camera Controls */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5">
-          <div className="flex flex-wrap gap-2">
+        {/* Camera Controls: Fixed-width mirror toggles + dedicated shutter action row */}
+        <div className="space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setMirrorPreview((v) => !v)}
-              className="whoops-btn whoops-btn-ghost px-3 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
-              <FlipHorizontal className="w-3.5 h-3.5" aria-hidden="true" />
-              Mirror Layar: {mirrorPreview ? 'ON' : 'OFF'}
+              <FlipHorizontal className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>Mirror Layar:</span>
+              <span className="inline-block w-7 text-center font-mono-tabular font-bold">
+                {mirrorPreview ? 'ON' : 'OFF'}
+              </span>
             </button>
             <button
               type="button"
               onClick={() => setSaveMirrored((v) => !v)}
-              className="whoops-btn whoops-btn-ghost px-3 py-2 text-xs cursor-pointer whitespace-nowrap"
+              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3 py-1.5 text-xs inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
             >
-              Simpan Mirrored: {saveMirrored ? 'YA' : 'TIDAK'}
+              <span>Simpan Mirrored:</span>
+              <span className="inline-block w-11 text-center font-mono-tabular font-bold">
+                {saveMirrored ? 'YA' : 'TIDAK'}
+              </span>
             </button>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5">
             <button
               type="button"
               onClick={onCaptureDemoPose}
               disabled={countdownVal !== null}
-              className="whoops-btn whoops-btn-secondary px-3.5 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              className="whoops-btn whoops-btn-secondary px-4 py-2.5 text-xs sm:text-sm inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
             >
-              <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-              {retakeTarget ? 'Pose Demo (Retake)' : 'Ambil Pose Demo'}
+              <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
+              <span>{retakeTarget ? 'Pose Demo (Retake)' : 'Ambil Pose Demo'}</span>
             </button>
             <motion.button
               type="button"
@@ -351,9 +355,9 @@ export function CameraStep({
                 onCaptureWithCountdown();
               }}
               disabled={countdownVal !== null}
-              className="whoops-btn whoops-btn-primary px-5 py-2 text-sm inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              className="whoops-btn whoops-btn-primary flex-1 px-5 py-2.5 text-sm sm:text-base inline-flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
             >
-              <Camera className="w-4 h-4" aria-hidden="true" />
+              <Camera className="w-4 h-4 shrink-0" aria-hidden="true" />
               <span>{retakeTarget ? 'RETAKE (3s)' : 'CAPTURE (3s)'}</span>
             </motion.button>
           </div>

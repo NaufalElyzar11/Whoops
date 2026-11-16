@@ -40,7 +40,7 @@ export function WelcomeStep({ activeFrames, onStartSession }: WelcomeStepProps) 
               className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-[#EFE2CE] border-2 border-[#3A231E] shadow-[2px_2px_0_#3A231E] text-xs font-display font-bold text-[#6D1D3A] tracking-wide mb-4"
             >
               <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>@azzzahrraaaa</span>
+              <span>@artisticwaves.ra</span>
             </motion.div>
 
             <div className="flex justify-center md:justify-start">
