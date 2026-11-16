@@ -493,3 +493,12 @@ export async function saveFrame(frame: PhotoFrame): Promise<void> {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
+
+export async function deleteFrame(frameId: string): Promise<void> {
+  const path = `frames/${frameId}`;
+  try {
+    await deleteDoc(doc(db, 'frames', frameId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}

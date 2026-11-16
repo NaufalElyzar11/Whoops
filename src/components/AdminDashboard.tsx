@@ -19,12 +19,12 @@ import {
   Search,
   Tag,
   Trash2,
-  Upload,
 } from 'lucide-react';
 import { getAdminAccessUrl, getBoothBaseUrl } from '../App';
 import { formatOrderTime, rupiah } from '../constants/defaults';
 import { auth, googleProvider } from '../firebase';
 import {
+  deleteDemoFrame,
   deleteDemoPackage,
   getDemoOrderMedia,
   getGDriveConfig,
@@ -38,6 +38,7 @@ import {
   type OrderGDriveLinkInfo,
 } from '../services/demoStore';
 import {
+  deleteFrame,
   deletePackage,
   fetchOrderMediaDataUrl,
   fetchOrderRawPhotos,
@@ -76,6 +77,7 @@ import {
 import { DoodleStudioModal } from './DoodleStudioModal';
 import { FramePreviewCanvas } from './FramePreviewCanvas';
 import { OrderQrModal } from './OrderQrModal';
+import { CanvaFramePanel } from './admin/CanvaFramePanel';
 
 interface AdminDashboardProps {
   user: User | null;
@@ -155,16 +157,8 @@ export function AdminDashboard({
   const [newVoucherValue, setNewVoucherValue] = useState<number>(5000);
   const [newVoucherDesc, setNewVoucherDesc] = useState('');
   const [confirmDeleteVoucherId, setConfirmDeleteVoucherId] = useState<string | null>(null);
+  const [confirmDeleteFrameId, setConfirmDeleteFrameId] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
-
-  // New Frame Form
-  const [newFrameName, setNewFrameName] = useState('');
-  const [newFrameCategory, setNewFrameCategory] = useState('Custom');
-  const [newFrameType, setNewFrameType] = useState<'vector' | 'image'>('vector');
-  const [newFrameBg, setNewFrameBg] = useState('#6D1D3A');
-  const [newFrameTrim, setNewFrameTrim] = useState('#FDF7EE');
-  const [newFrameLabelColor, setNewFrameLabelColor] = useState('#FDF7EE');
-  const [newFrameOverlayData, setNewFrameOverlayData] = useState('');
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -305,6 +299,13 @@ export function AdminDashboard({
     saveDemoFrame(frame);
     if (adminUsingCloud) {
       await saveFrame(frame);
+    }
+  };
+
+  const persistDeleteFrame = async (frameId: string) => {
+    deleteDemoFrame(frameId);
+    if (adminUsingCloud) {
+      await deleteFrame(frameId);
     }
   };
 
@@ -599,31 +600,11 @@ export function AdminDashboard({
     }
   };
 
-  const handleCreateFrame = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFrameName.trim()) return;
-    if (newFrameType === 'image' && !newFrameOverlayData) {
-      showToast('Silakan unggah gambar overlay PNG frame terlebih dahulu.');
-      return;
-    }
+  const handleSaveNewFrame = async (frame: PhotoFrame) => {
     setSavingId('new-frame');
     try {
-      const id = `f-${Date.now()}`;
-      await persistFrame({
-        id,
-        name: newFrameName.trim(),
-        category: newFrameCategory.trim() || 'Custom',
-        type: newFrameType,
-        bg: newFrameBg,
-        trim: newFrameTrim,
-        labelColor: newFrameLabelColor,
-        overlayImageData: newFrameType === 'image' ? newFrameOverlayData : '',
-        active: true,
-        sortOrder: frames.length + 1,
-      });
-      setNewFrameName('');
-      setNewFrameOverlayData('');
-      showToast('Frame baru berhasil ditambahkan.');
+      await persistFrame(frame);
+      showToast(`Frame "${frame.name}" berhasil ditambahkan ke Booth!`);
     } catch {
       showToast('Gagal menyimpan frame baru.');
     } finally {
@@ -631,20 +612,21 @@ export function AdminDashboard({
     }
   };
 
-  const handleFramePngUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        if (reader.result.length > 740000) {
-          showToast('Ukuran PNG overlay maksimal ~500 KB agar sinkron cepat.');
-          return;
-        }
-        setNewFrameOverlayData(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+  const handleDeleteFrame = async (frame: PhotoFrame) => {
+    if (frames.length <= 1) {
+      showToast('Minimal harus tersisa 1 frame di sistem.');
+      return;
+    }
+    setSavingId(frame.id);
+    try {
+      await persistDeleteFrame(frame.id);
+      setConfirmDeleteFrameId(null);
+      showToast(`Frame "${frame.name}" dihapus.`);
+    } catch {
+      showToast(`Gagal menghapus frame "${frame.name}".`);
+    } finally {
+      setSavingId(null);
+    }
   };
 
   const rawBaseOrders = adminUsingCloud ? cloudOrders : demoOrders;
@@ -1713,129 +1695,80 @@ export function AdminDashboard({
       {/* TAB 5: FRAMES */}
       {activeTab === 'frames' && (
         <div className="space-y-6">
-          <form onSubmit={handleCreateFrame} className="whoops-card p-5">
-            <h3 className="font-display font-bold text-lg text-[#3A231E] mb-3">
-              Tambah Frame 6-Slot Baru
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div>
-                <label className="block text-xs font-display font-semibold mb-1">Nama Frame</label>
-                <input
-                  required
-                  value={newFrameName}
-                  onChange={(e) => setNewFrameName(e.target.value)}
-                  placeholder="Misal: Matcha Retro Edition"
-                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-display font-semibold mb-1">Kategori</label>
-                <input
-                  value={newFrameCategory}
-                  onChange={(e) => setNewFrameCategory(e.target.value)}
-                  placeholder="Retro Classic / Cute Pastel"
-                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-display font-semibold mb-1">Tipe Frame</label>
-                <select
-                  value={newFrameType}
-                  onChange={(e) => setNewFrameType(e.target.value as 'vector' | 'image')}
-                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white"
-                >
-                  <option value="vector">Warna Vektor 6-Slot</option>
-                  <option value="image">Unggah PNG Transparan</option>
-                </select>
-              </div>
-              <div className="flex items-end">
-                <button
-                  type="submit"
-                  disabled={savingId === 'new-frame'}
-                  className="whoops-btn whoops-btn-primary w-full py-2 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  Tambah Frame
-                </button>
-              </div>
-            </div>
-
-            {newFrameType === 'vector' ? (
-              <div className="flex flex-wrap gap-4 mt-3 pt-3 border-t border-[#3A231E]/15">
-                <label className="text-xs font-display font-semibold inline-flex items-center gap-2">
-                  Latar:
-                  <input
-                    type="color"
-                    value={newFrameBg}
-                    onChange={(e) => setNewFrameBg(e.target.value)}
-                    className="w-9 h-7 rounded cursor-pointer"
-                  />
-                </label>
-                <label className="text-xs font-display font-semibold inline-flex items-center gap-2">
-                  Garis Trim:
-                  <input
-                    type="color"
-                    value={newFrameTrim}
-                    onChange={(e) => setNewFrameTrim(e.target.value)}
-                    className="w-9 h-7 rounded cursor-pointer"
-                  />
-                </label>
-                <label className="text-xs font-display font-semibold inline-flex items-center gap-2">
-                  Teks Logo:
-                  <input
-                    type="color"
-                    value={newFrameLabelColor}
-                    onChange={(e) => setNewFrameLabelColor(e.target.value)}
-                    className="w-9 h-7 rounded cursor-pointer"
-                  />
-                </label>
-              </div>
-            ) : (
-              <div className="mt-3 pt-3 border-t border-[#3A231E]/15 flex flex-wrap items-center gap-3">
-                <label className="whoops-btn whoops-btn-secondary px-4 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer">
-                  <Upload className="w-3.5 h-3.5" />
-                  Unggah PNG Frame (Rasio 1205×1795)
-                  <input
-                    type="file"
-                    accept="image/png"
-                    onChange={handleFramePngUpload}
-                    className="hidden"
-                  />
-                </label>
-                {newFrameOverlayData && (
-                  <span className="text-xs text-emerald-700 font-semibold">
-                    PNG overlay siap diunggah.
-                  </span>
-                )}
-              </div>
-            )}
-          </form>
+          <CanvaFramePanel
+            framesCount={frames.length}
+            savingId={savingId}
+            onSaveFrame={handleSaveNewFrame}
+            onToast={showToast}
+          />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {frames.map((f) => (
-              <div key={f.id} className="whoops-card p-5 text-center flex flex-col justify-between">
-                <div>
-                  <FramePreviewCanvas frame={f} maxWidthClass="max-w-[165px]" />
-                  <div className="text-xs text-[#61433B] mt-3">{f.category}</div>
-                  <h4 className="font-display font-bold text-base text-[#3A231E] mb-3">
-                    {f.name}
-                  </h4>
-                </div>
-                <button
-                  onClick={async () => {
-                    await persistFrame({ ...f, active: !f.active });
-                    showToast(
-                      `Frame "${f.name}" ${!f.active ? 'diaktifkan' : 'dinonaktifkan'}.`
-                    );
-                  }}
-                  className={`whoops-btn w-full py-2 text-xs cursor-pointer ${
-                    f.active ? 'whoops-btn-secondary' : 'whoops-btn-ghost'
-                  }`}
+            {frames.map((f) => {
+              const confirmDel = confirmDeleteFrameId === f.id;
+              return (
+                <div
+                  key={f.id}
+                  className="whoops-card p-5 text-center flex flex-col justify-between gap-3"
                 >
-                  {f.active ? 'Status: AKTIF' : 'Status: NONAKTIF'}
-                </button>
-              </div>
-            ))}
+                  <div>
+                    <FramePreviewCanvas frame={f} maxWidthClass="max-w-[165px]" />
+                    <div className="mt-3 flex items-center justify-center gap-1.5">
+                      <span className="text-xs text-[#61433B]">{f.category}</span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded border border-[#3A231E]/40 text-[10px] font-display font-bold ${
+                          f.type === 'image'
+                            ? 'bg-[#F3D2DB] text-[#6D1D3A]'
+                            : 'bg-[#EFE2CE] text-[#3A231E]'
+                        }`}
+                      >
+                        {f.type === 'image' ? 'Canva / PNG' : 'Vektor'}
+                      </span>
+                    </div>
+                    <h4 className="font-display font-bold text-base text-[#3A231E] mt-1">
+                      {f.name}
+                    </h4>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await persistFrame({ ...f, active: !f.active });
+                        showToast(
+                          `Frame "${f.name}" ${!f.active ? 'diaktifkan' : 'dinonaktifkan'}.`
+                        );
+                      }}
+                      className={`whoops-btn flex-1 py-2 text-xs cursor-pointer ${
+                        f.active ? 'whoops-btn-secondary' : 'whoops-btn-ghost'
+                      }`}
+                    >
+                      {f.active ? 'Status: AKTIF' : 'Status: NONAKTIF'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingId === f.id}
+                      onClick={() => {
+                        if (!confirmDel) {
+                          setConfirmDeleteFrameId(f.id);
+                          window.setTimeout(() => setConfirmDeleteFrameId(null), 3200);
+                        } else {
+                          void handleDeleteFrame(f);
+                        }
+                      }}
+                      className={`whoops-btn whoops-btn-compact px-3 py-2 text-xs inline-flex items-center gap-1 cursor-pointer ${
+                        confirmDel
+                          ? 'whoops-btn-primary'
+                          : 'whoops-btn-ghost text-[#6D1D3A]'
+                      }`}
+                      aria-label={`Hapus frame ${f.name}`}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      {confirmDel && <span>Yakin?</span>}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

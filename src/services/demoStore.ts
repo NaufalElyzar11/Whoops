@@ -269,6 +269,15 @@ export function saveDemoFrame(frame: PhotoFrame): void {
   persistAndBroadcast({ ...state, frames: nextFrames, hasCustomCatalog: true });
 }
 
+export function deleteDemoFrame(frameId: string): void {
+  const state = loadDemoState();
+  persistAndBroadcast({
+    ...state,
+    frames: state.frames.filter((f) => f.id !== frameId),
+    hasCustomCatalog: true,
+  });
+}
+
 export function getGDriveConfig(): GoogleDriveConfig {
   try {
     const raw = localStorage.getItem(GDRIVE_CONFIG_KEY);
