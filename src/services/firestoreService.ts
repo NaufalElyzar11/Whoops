@@ -27,11 +27,12 @@ import type {
   StoreSettings,
   WorkflowStatus,
 } from '../types';
-import { chunkDataUrl } from '../utils/canvasEngine';
+import { chunkDataUrl, fitJpegDataUrlUnderLimit } from '../utils/canvasEngine';
 import {
   decodeFrameFromFirestore,
   encodeFrameForFirestore,
 } from '../utils/frameLayouts';
+import type { OrderGDriveLinkInfo } from './demoStore';
 
 export function subscribeStoreSettings(
   onData: (settings: StoreSettings, existsInCloud: boolean) => void
@@ -262,16 +263,21 @@ export async function createPhotoboothOrder(input: CreateOrderInput): Promise<st
       });
     }
 
-    const validRaws = (input.rawPhotos || [])
-      .filter((r) => r.dataUrl.length > 0 && r.dataUrl.length <= 440000)
-      .slice(0, 19);
+    const fittedRaws: RawPhotoPayload[] = [];
+    for (const r of (input.rawPhotos || []).slice(0, 19)) {
+      if (!r.dataUrl) continue;
+      const fittedUrl = await fitJpegDataUrlUnderLimit(r.dataUrl, 420000);
+      if (fittedUrl.length > 0 && fittedUrl.length <= 440000) {
+        fittedRaws.push({ filename: r.filename, dataUrl: fittedUrl });
+      }
+    }
 
-    for (let i = 0; i < validRaws.length; i++) {
+    for (let i = 0; i < fittedRaws.length; i++) {
       await setDoc(doc(db, 'orders', orderId, 'media', `raw_${i}`), {
         kind: 'original',
         index: i,
-        totalChunks: validRaws.length,
-        data: validRaws[i].dataUrl,
+        totalChunks: fittedRaws.length,
+        data: fittedRaws[i].dataUrl,
         createdAt: serverTimestamp(),
       });
     }
@@ -334,6 +340,73 @@ export async function fetchOrderMediaDataUrl(
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
   }
+}
+
+const GDRIVE_META_DOC_ID = 'gdrive_meta';
+
+function parseGDriveMetaData(raw: unknown): OrderGDriveLinkInfo | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<OrderGDriveLinkInfo>;
+    if (!parsed.folderId || !parsed.folderUrl) return null;
+    return {
+      folderId: parsed.folderId,
+      folderUrl: parsed.folderUrl,
+      fileCount: Number(parsed.fileCount) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Stored in orders/{orderId}/media/gdrive_meta so existing live Firestore rules persist GDrive links across devices
+export async function saveOrderGDriveMeta(
+  orderId: string,
+  info: OrderGDriveLinkInfo
+): Promise<void> {
+  const path = `orders/${orderId}/media/${GDRIVE_META_DOC_ID}`;
+  try {
+    await setDoc(doc(db, 'orders', orderId, 'media', GDRIVE_META_DOC_ID), {
+      kind: 'final',
+      index: 0,
+      totalChunks: 1,
+      data: JSON.stringify(info),
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function fetchOrderGDriveMeta(
+  orderId: string
+): Promise<OrderGDriveLinkInfo | null> {
+  try {
+    const snap = await getDoc(doc(db, 'orders', orderId, 'media', GDRIVE_META_DOC_ID));
+    if (!snap.exists()) return null;
+    return parseGDriveMetaData((snap.data() as { data?: unknown }).data);
+  } catch {
+    return null;
+  }
+}
+
+export function subscribeOrderGDriveMeta(
+  orderId: string,
+  onData: (info: OrderGDriveLinkInfo | null) => void
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, 'orders', orderId, 'media', GDRIVE_META_DOC_ID),
+    (snap) => {
+      if (!snap.exists()) {
+        onData(null);
+        return;
+      }
+      onData(parseGDriveMetaData((snap.data() as { data?: unknown }).data));
+    },
+    () => {
+      onData(null);
+    }
+  );
 }
 
 export async function verifyOrderPayment(order: PhotoboothOrder): Promise<void> {

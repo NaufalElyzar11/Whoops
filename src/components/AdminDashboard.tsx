@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { signInWithPopup, signOut, type User } from 'firebase/auth';
+import appsScriptCodeRaw from '../../google-apps-script/Code.gs?raw';
 import {
   CheckCircle2,
   CloudUpload,
@@ -40,11 +41,13 @@ import {
 import {
   deleteFrame,
   deletePackage,
+  fetchOrderGDriveMeta,
   fetchOrderMediaDataUrl,
   fetchOrderRawPhotos,
   markOrderPrinted,
   rejectOrderPayment,
   saveFrame,
+  saveOrderGDriveMeta,
   savePackage,
   saveStoreSettings,
   seedInitialCatalogIfEmpty,
@@ -53,9 +56,12 @@ import {
   verifyOrderPayment,
 } from '../services/firestoreService';
 import {
+  extractGoogleDriveFolderId,
   testGoogleAppsScriptConnection,
   uploadDoodleToGoogleDrive,
   uploadOrderToGoogleDrive,
+  validateAppsScriptWebAppUrl,
+  type GDriveUploadProgress,
 } from '../services/googleDriveService';
 import type {
   AdminTab,
@@ -145,8 +151,13 @@ export function AdminDashboard({
     message: string;
   } | null>(null);
   const [uploadingGdriveOrderId, setUploadingGdriveOrderId] = useState<string | null>(null);
+  const [gdriveUploadProgress, setGdriveUploadProgress] = useState<GDriveUploadProgress | null>(null);
   const [gdriveUploadError, setGdriveUploadError] = useState<string | null>(null);
+  const [gdriveUploadWarning, setGdriveUploadWarning] = useState<string | null>(null);
   const [showAppsScriptGuide, setShowAppsScriptGuide] = useState(false);
+  const [copiedAppsScript, setCopiedAppsScript] = useState(false);
+  const gdriveSyncFetchedIdsRef = useRef<Set<string>>(new Set());
+  const gdriveSectionRef = useRef<HTMLDivElement | null>(null);
 
   // Settings & package local editing buffers
   const [printAddonDraft, setPrintAddonDraft] = useState<number>(settings.printAddonPrice);
@@ -217,6 +228,58 @@ export function AdminDashboard({
       if (unsub) unsub();
     };
   }, [user, adminUsingCloud, onCloudAccessDenied]);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'whoops_gdrive_config_v1') {
+        const latest = getGDriveConfig();
+        setGdriveConfig(latest);
+        setGdriveUrlDraft(latest.webAppUrl);
+        setGdriveSecretDraft(latest.secretKey);
+        setGdriveRootFolderDraft(latest.rootFolderId);
+      } else if (e.key === 'whoops_order_gdrive_links_v1') {
+        setGdriveLinkMap(getOrderGDriveLinkMap());
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  useEffect(() => {
+    if (!adminUsingCloud || cloudOrders.length === 0) return;
+
+    const candidates = cloudOrders.filter(
+      (o) =>
+        o.paymentStatus === 'VERIFIED' &&
+        !o.gdriveFolderUrl &&
+        !gdriveLinkMap[o.id]?.folderUrl &&
+        !gdriveSyncFetchedIdsRef.current.has(o.id)
+    );
+    if (candidates.length === 0) return;
+
+    candidates.forEach((o) => gdriveSyncFetchedIdsRef.current.add(o.id));
+    let cancelled = false;
+
+    void Promise.all(
+      candidates.map(async (o) => {
+        const meta = await fetchOrderGDriveMeta(o.id);
+        return { orderId: o.id, meta };
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      let latestMap: Record<string, OrderGDriveLinkInfo> | null = null;
+      for (const item of results) {
+        if (item.meta) {
+          latestMap = saveOrderGDriveLink(item.orderId, item.meta);
+        }
+      }
+      if (latestMap) setGdriveLinkMap(latestMap);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [adminUsingCloud, cloudOrders, gdriveLinkMap]);
 
   const handleGoogleLogin = async () => {
     setAuthError(null);
@@ -314,7 +377,9 @@ export function AdminDashboard({
     if (!gdriveConfig.webAppUrl.trim()) return;
 
     setUploadingGdriveOrderId(targetOrder.id);
+    setGdriveUploadProgress(null);
     setGdriveUploadError(null);
+    setGdriveUploadWarning(null);
     try {
       const localMedia = await getDemoOrderMedia(targetOrder.id);
       let composite4RPng: string | null = localMedia
@@ -350,16 +415,34 @@ export function AdminDashboard({
         targetOrder,
         composite4RPng,
         rawPhotos,
-        existingFolderId
+        existingFolderId,
+        (progress) => setGdriveUploadProgress(progress)
       );
 
-      const nextMap = saveOrderGDriveLink(targetOrder.id, uploaded);
+      const gdriveInfo: OrderGDriveLinkInfo = {
+        folderId: uploaded.folderId,
+        folderUrl: uploaded.folderUrl,
+        fileCount: uploaded.fileCount,
+      };
+      const nextMap = saveOrderGDriveLink(targetOrder.id, gdriveInfo);
       setGdriveLinkMap(nextMap);
       updateDemoOrder(targetOrder.id, {
         gdriveFolderId: uploaded.folderId,
         gdriveFolderUrl: uploaded.folderUrl,
         gdriveUploadedCount: uploaded.fileCount,
       });
+
+      if (adminUsingCloud) {
+        try {
+          await saveOrderGDriveMeta(targetOrder.id, gdriveInfo);
+        } catch (metaErr) {
+          console.warn('Cloud GDrive link sync skipped/failed:', metaErr);
+        }
+      }
+
+      if (uploaded.sharingWarning) {
+        setGdriveUploadWarning(uploaded.sharingWarning);
+      }
 
       setActiveQrOrder((prev) =>
         prev && prev.id === targetOrder.id
@@ -381,6 +464,7 @@ export function AdminDashboard({
       showToast(`Upload Google Drive gagal: ${msg}`);
     } finally {
       setUploadingGdriveOrderId(null);
+      setGdriveUploadProgress(null);
     }
   };
 
@@ -407,10 +491,14 @@ export function AdminDashboard({
         workflowStatus: nextWorkflow,
       };
       setGdriveUploadError(null);
+      setGdriveUploadWarning(null);
+      setGdriveUploadProgress(null);
       setActiveQrOrder(verifiedOrder);
       showToast(`Pesanan ${order.orderCode} terverifikasi.`);
 
-      if (gdriveConfig.webAppUrl.trim() && !verifiedOrder.gdriveFolderUrl) {
+      const existingFolderUrl =
+        verifiedOrder.gdriveFolderUrl || gdriveLinkMap[verifiedOrder.id]?.folderUrl;
+      if (gdriveConfig.webAppUrl.trim() && !existingFolderUrl) {
         void triggerUploadOrderToGdrive(verifiedOrder);
       }
     } catch {
@@ -457,11 +545,26 @@ export function AdminDashboard({
 
   const handleSaveGdriveConfig = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanRootId = extractGoogleDriveFolderId(gdriveRootFolderDraft);
+    const cleanUrl = gdriveUrlDraft.trim();
+
+    if (cleanUrl) {
+      try {
+        validateAppsScriptWebAppUrl(cleanUrl);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'URL Web App tidak valid.';
+        setGdriveTestStatus({ ok: false, message: msg });
+        return;
+      }
+    }
+
     const next: GoogleDriveConfig = {
-      webAppUrl: gdriveUrlDraft.trim(),
+      webAppUrl: cleanUrl,
       secretKey: gdriveSecretDraft.trim(),
-      rootFolderId: gdriveRootFolderDraft.trim(),
+      rootFolderId: cleanRootId,
     };
+    setGdriveUrlDraft(cleanUrl);
+    setGdriveRootFolderDraft(cleanRootId);
     saveGDriveConfig(next);
     setGdriveConfig(next);
     setGdriveTestStatus(null);
@@ -469,11 +572,15 @@ export function AdminDashboard({
   };
 
   const handleTestGdriveConnection = async () => {
+    const cleanRootId = extractGoogleDriveFolderId(gdriveRootFolderDraft);
+    const cleanUrl = gdriveUrlDraft.trim();
     const candidate: GoogleDriveConfig = {
-      webAppUrl: gdriveUrlDraft.trim(),
+      webAppUrl: cleanUrl,
       secretKey: gdriveSecretDraft.trim(),
-      rootFolderId: gdriveRootFolderDraft.trim(),
+      rootFolderId: cleanRootId,
     };
+    setGdriveUrlDraft(cleanUrl);
+    setGdriveRootFolderDraft(cleanRootId);
     saveGDriveConfig(candidate);
     setGdriveConfig(candidate);
     setIsTestingGdrive(true);
@@ -489,6 +596,21 @@ export function AdminDashboard({
     } finally {
       setIsTestingGdrive(false);
     }
+  };
+
+  const handleCopyAppsScriptCode = () => {
+    navigator.clipboard?.writeText(appsScriptCodeRaw);
+    setCopiedAppsScript(true);
+    window.setTimeout(() => setCopiedAppsScript(false), 2000);
+    showToast('Kode Code.gs disalin! Tempel ke script.google.com.');
+  };
+
+  const openGdriveSettingsSection = () => {
+    setActiveTab('packages');
+    setShowAppsScriptGuide(true);
+    window.setTimeout(() => {
+      gdriveSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
   };
 
   const handleSaveSettings = async () => {
@@ -700,6 +822,22 @@ export function AdminDashboard({
               ? `Cloud Sync (${user?.email || 'Admin'})`
               : 'Mode Demo (Tanpa Login)'}
           </span>
+
+          <button
+            type="button"
+            onClick={openGdriveSettingsSection}
+            className={`whoops-btn whoops-btn-compact px-2.5 py-1.5 text-[11px] inline-flex items-center gap-1 cursor-pointer whitespace-nowrap ${
+              gdriveConfig.webAppUrl.trim()
+                ? 'bg-emerald-100 text-emerald-900'
+                : 'whoops-btn-ghost'
+            }`}
+            title="Atur koneksi Google Apps Script untuk upload otomatis ke Google Drive"
+          >
+            <CloudUpload className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>
+              {gdriveConfig.webAppUrl.trim() ? 'GDrive: Aktif' : 'Sambungkan GDrive'}
+            </span>
+          </button>
 
           <button
             type="button"
@@ -991,6 +1129,8 @@ export function AdminDashboard({
                               type="button"
                               onClick={() => {
                                 setGdriveUploadError(null);
+                                setGdriveUploadWarning(null);
+                                setGdriveUploadProgress(null);
                                 setActiveQrOrder(o);
                               }}
                               className="whoops-btn whoops-btn-secondary whoops-btn-compact px-2.5 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
@@ -1129,6 +1269,8 @@ export function AdminDashboard({
                         type="button"
                         onClick={() => {
                           setGdriveUploadError(null);
+                          setGdriveUploadWarning(null);
+                          setGdriveUploadProgress(null);
                           setActiveQrOrder(o);
                         }}
                         className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
@@ -1538,7 +1680,7 @@ export function AdminDashboard({
           </div>
 
           {/* Google Drive Apps Script Integration */}
-          <div className="whoops-card p-5 space-y-4">
+          <div id="gdrive-settings-card" ref={gdriveSectionRef} className="whoops-card p-5 space-y-4">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
                 <div className="inline-flex items-center gap-1.5 text-xs font-display font-bold text-[#6D1D3A] mb-1">
@@ -1587,14 +1729,14 @@ export function AdminDashboard({
                     htmlFor="gdrive-root-folder"
                     className="block text-xs font-display font-semibold mb-1"
                   >
-                    ID Folder Induk GDrive (Opsional)
+                    ID atau URL Folder Induk GDrive (Opsional)
                   </label>
                   <input
                     id="gdrive-root-folder"
                     type="text"
                     value={gdriveRootFolderDraft}
                     onChange={(e) => setGdriveRootFolderDraft(e.target.value)}
-                    placeholder="Kosongkan untuk My Drive utama"
+                    placeholder="Tempel ID folder atau link https://drive.google.com/drive/folders/..."
                     className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-xs font-mono-tabular bg-white"
                   />
                 </div>
@@ -1663,28 +1805,38 @@ export function AdminDashboard({
             )}
 
             {showAppsScriptGuide && (
-              <div className="p-3.5 rounded-xl bg-[#EFE2CE]/75 border border-[#3A231E]/40 text-xs text-[#3A231E] space-y-1.5 leading-relaxed">
-                <div className="font-display font-bold">
-                  Cara Pasang Google Apps Script (Gratis, pakai akun Google Drive studio):
+              <div className="p-3.5 rounded-xl bg-[#EFE2CE]/75 border border-[#3A231E]/40 text-xs text-[#3A231E] space-y-2 leading-relaxed">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-display font-bold">
+                    Cara Pasang Google Apps Script (Gratis, pakai akun Google Drive studio):
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCopyAppsScriptCode}
+                    className="whoops-btn whoops-btn-secondary whoops-btn-compact px-3 py-1.5 text-[11px] inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>{copiedAppsScript ? 'Kode Disalin!' : 'Salin Kode Code.gs'}</span>
+                  </button>
                 </div>
                 <ol className="list-decimal pl-4 space-y-1">
                   <li>
                     Buka <b>script.google.com</b> dengan akun Google Drive studio -&gt; klik <b>New project</b>.
                   </li>
                   <li>
-                    Hapus isi bawaan lalu tempel seluruh kode dari file{' '}
+                    Hapus isi bawaan di editor, tekan <b>Salin Kode Code.gs</b> di atas (atau salin dari{' '}
                     <code className="px-1 py-0.5 rounded bg-white border border-[#3A231E]/25">
                       google-apps-script/Code.gs
-                    </code>{' '}
-                    di repositori ini.
+                    </code>
+                    ), lalu tempel dan tekan Save.
                   </li>
                   <li>
                     Klik <b>Deploy -&gt; New deployment -&gt; Web app</b>, pilih{' '}
-                    <b>Execute as: Me</b> dan <b>Who has access: Anyone</b>, lalu izinkan akses Drive.
+                    <b>Execute as: Me</b> dan <b>Who has access: Anyone</b>, lalu izinkan akses Drive (jika muncul peringatan aplikasi belum terverifikasi, klik <b>Advanced -&gt; Go to ... (unsafe) -&gt; Allow</b>).
                   </li>
                   <li>
                     Salin URL Web App berakhiran <code className="px-1 rounded bg-white">/exec</code>{' '}
-                    lalu tempel ke kolom di atas dan tekan <b>Tes Koneksi Google Drive</b>.
+                    lalu tempel ke kolom di atas, tekan <b>Simpan URL Apps Script</b>, lalu tekan <b>Tes Koneksi Google Drive</b>.
                   </li>
                 </ol>
               </div>
@@ -1793,33 +1945,46 @@ export function AdminDashboard({
 
             const folderId =
               targetOrder.gdriveFolderId || gdriveLinkMap[targetOrder.id]?.folderId;
-            if (gdriveConfig.webAppUrl.trim() && folderId) {
-              try {
-                const res = await uploadDoodleToGoogleDrive(
-                  gdriveConfig,
-                  targetOrder,
-                  folderId,
-                  finalPngDataUrl
-                );
-                const prevCount =
-                  targetOrder.gdriveUploadedCount ||
-                  gdriveLinkMap[targetOrder.id]?.fileCount ||
-                  0;
-                const totalCount = prevCount + res.fileCount;
-                const nextMap = saveOrderGDriveLink(targetOrder.id, {
-                  folderId: res.folderId,
-                  folderUrl: res.folderUrl,
-                  fileCount: totalCount,
+            if (gdriveConfig.webAppUrl.trim()) {
+              if (!folderId) {
+                await triggerUploadOrderToGdrive({
+                  ...targetOrder,
+                  doodleDone: true,
+                  finalChunks: Math.max(1, targetOrder.finalChunks),
                 });
-                setGdriveLinkMap(nextMap);
-                updateDemoOrder(targetOrder.id, {
-                  gdriveUploadedCount: totalCount,
-                });
-                showToast('File Doodle ikut ditambahkan ke folder Google Drive!');
-              } catch (err) {
-                const msg =
-                  err instanceof Error ? err.message : 'Gagal menambah file Doodle ke GDrive.';
-                showToast(msg);
+              } else {
+                try {
+                  const res = await uploadDoodleToGoogleDrive(
+                    gdriveConfig,
+                    targetOrder,
+                    folderId,
+                    finalPngDataUrl
+                  );
+                  const gdriveInfo: OrderGDriveLinkInfo = {
+                    folderId: res.folderId,
+                    folderUrl: res.folderUrl,
+                    fileCount: res.fileCount,
+                  };
+                  const nextMap = saveOrderGDriveLink(targetOrder.id, gdriveInfo);
+                  setGdriveLinkMap(nextMap);
+                  updateDemoOrder(targetOrder.id, {
+                    gdriveFolderId: res.folderId,
+                    gdriveFolderUrl: res.folderUrl,
+                    gdriveUploadedCount: res.fileCount,
+                  });
+                  if (adminUsingCloud) {
+                    try {
+                      await saveOrderGDriveMeta(targetOrder.id, gdriveInfo);
+                    } catch (metaErr) {
+                      console.warn('Cloud GDrive link sync skipped/failed:', metaErr);
+                    }
+                  }
+                  showToast('File Doodle ikut ditambahkan ke folder Google Drive!');
+                } catch (err) {
+                  const msg =
+                    err instanceof Error ? err.message : 'Gagal menambah file Doodle ke GDrive.';
+                  showToast(msg);
+                }
               }
             }
           }}
@@ -1831,7 +1996,11 @@ export function AdminDashboard({
           order={activeQrOrder}
           gdriveConfig={gdriveConfig}
           isUploadingGdrive={uploadingGdriveOrderId === activeQrOrder.id}
+          gdriveProgress={
+            uploadingGdriveOrderId === activeQrOrder.id ? gdriveUploadProgress : null
+          }
           gdriveError={gdriveUploadError}
+          gdriveWarning={gdriveUploadWarning}
           onUploadToGdrive={(ord) => void triggerUploadOrderToGdrive(ord)}
           onClose={() => setActiveQrOrder(null)}
           onDownloadHighRes={handleDownloadHighRes}

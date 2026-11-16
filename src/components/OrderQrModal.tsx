@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { rupiah } from '../constants/defaults';
+import type { GDriveUploadProgress } from '../services/googleDriveService';
 import type { GoogleDriveConfig, PhotoboothOrder } from '../types';
 import { QrCodeBox } from './QrCodeBox';
 
@@ -19,7 +20,9 @@ interface OrderQrModalProps {
   order: PhotoboothOrder;
   gdriveConfig: GoogleDriveConfig;
   isUploadingGdrive: boolean;
+  gdriveProgress?: GDriveUploadProgress | null;
   gdriveError: string | null;
+  gdriveWarning?: string | null;
   onUploadToGdrive: (order: PhotoboothOrder) => void;
   onClose: () => void;
   onDownloadHighRes: (
@@ -34,7 +37,9 @@ export function OrderQrModal({
   order,
   gdriveConfig,
   isUploadingGdrive,
+  gdriveProgress,
   gdriveError,
+  gdriveWarning,
   onUploadToGdrive,
   onClose,
   onDownloadHighRes,
@@ -107,8 +112,10 @@ export function OrderQrModal({
                   className="w-8 h-8 animate-spin text-[#6D1D3A]"
                   aria-hidden="true"
                 />
-                <div className="font-display font-bold text-sm text-[#3A231E]">
-                  Mengupload Foto Mentah + 4R ke Google Drive...
+                <div className="font-display font-bold text-sm text-[#3A231E] tabular-nums">
+                  {gdriveProgress && gdriveProgress.totalFiles > 0
+                    ? `Mengupload ${Math.min(gdriveProgress.uploadedFiles + 1, gdriveProgress.totalFiles)}/${gdriveProgress.totalFiles} file ke Google Drive...`
+                    : 'Mengupload Foto Mentah + 4R ke Google Drive...'}
                 </div>
                 <p className="text-[11px] text-[#61433B] leading-relaxed">
                   QR Code langsung ke folder Google Drive akan muncul begitu upload selesai.
@@ -185,6 +192,12 @@ export function OrderQrModal({
             {gdriveError && (
               <div className="w-full p-2.5 rounded-xl bg-rose-100 border border-[#6D1D3A] text-[11px] text-[#6D1D3A] text-left">
                 <b>Upload GDrive gagal:</b> {gdriveError}
+              </div>
+            )}
+
+            {gdriveWarning && (
+              <div className="w-full p-2.5 rounded-xl bg-amber-50 border border-[#3A231E] text-[11px] text-[#3A231E] text-left">
+                <b>Catatan Akses Folder:</b> {gdriveWarning}
               </div>
             )}
 

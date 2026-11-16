@@ -429,3 +429,41 @@ export function chunkDataUrl(dataUrl: string, chunkSize = 380000): string[] {
   }
   return chunks;
 }
+
+/** Shrinks oversized JPEG data URLs so each raw pose fits safely under Firestore's 450KB doc limit. */
+export async function fitJpegDataUrlUnderLimit(
+  dataUrl: string,
+  maxChars = 420000
+): Promise<string> {
+  if (!dataUrl || dataUrl.length <= maxChars) return dataUrl;
+
+  try {
+    const img = await loadImage(dataUrl);
+    const steps: { maxDim: number; qualities: number[] }[] = [
+      { maxDim: 1280, qualities: [0.85, 0.76, 0.68] },
+      { maxDim: 960, qualities: [0.8, 0.7, 0.6] },
+      { maxDim: 760, qualities: [0.68, 0.56] },
+    ];
+
+    for (const step of steps) {
+      const scale = Math.min(1, step.maxDim / Math.max(img.width, img.height, 1));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d');
+      if (!ctx) break;
+      ctx.drawImage(img, 0, 0, w, h);
+
+      for (const q of step.qualities) {
+        const candidate = c.toDataURL('image/jpeg', q);
+        if (candidate.length <= maxChars) return candidate;
+      }
+    }
+  } catch {
+    // Keep original if offscreen re-encoding fails
+  }
+
+  return dataUrl;
+}

@@ -282,17 +282,19 @@ export function deleteDemoFrame(frameId: string): void {
 }
 
 export function getGDriveConfig(): GoogleDriveConfig {
+  const envUrl = (import.meta.env.VITE_GDRIVE_WEBAPP_URL || '').trim();
+  const envRootFolder = (import.meta.env.VITE_GDRIVE_ROOT_FOLDER_ID || '').trim();
   try {
     const raw = localStorage.getItem(GDRIVE_CONFIG_KEY);
-    if (!raw) return { webAppUrl: '', secretKey: '', rootFolderId: '' };
+    if (!raw) return { webAppUrl: envUrl, secretKey: '', rootFolderId: envRootFolder };
     const parsed = JSON.parse(raw) as Partial<GoogleDriveConfig>;
     return {
-      webAppUrl: parsed.webAppUrl || '',
+      webAppUrl: parsed.webAppUrl || envUrl,
       secretKey: parsed.secretKey || '',
-      rootFolderId: parsed.rootFolderId || '',
+      rootFolderId: parsed.rootFolderId || envRootFolder,
     };
   } catch {
-    return { webAppUrl: '', secretKey: '', rootFolderId: '' };
+    return { webAppUrl: envUrl, secretKey: '', rootFolderId: envRootFolder };
   }
 }
 

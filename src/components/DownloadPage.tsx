@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Download, Loader2, Sparkles } from 'lucide-react';
+import { ArrowLeft, Download, ExternalLink, Loader2, Sparkles } from 'lucide-react';
+import { getOrderGDriveLinkMap, type OrderGDriveLinkInfo } from '../services/demoStore';
 import {
   fetchOrderMediaDataUrl,
+  subscribeOrderGDriveMeta,
   subscribeSingleOrder,
 } from '../services/firestoreService';
 import type { PhotoboothOrder } from '../types';
@@ -18,6 +20,9 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null);
   const [loadingImage, setLoadingImage] = useState(false);
+  const [gdriveMeta, setGdriveMeta] = useState<OrderGDriveLinkInfo | null>(
+    () => getOrderGDriveLinkMap()[orderId] || null
+  );
 
   useEffect(() => {
     setLoadingOrder(true);
@@ -33,7 +38,13 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
         setLoadingOrder(false);
       }
     );
-    return () => unsub();
+    const unsubGdrive = subscribeOrderGDriveMeta(orderId, (meta) => {
+      if (meta) setGdriveMeta(meta);
+    });
+    return () => {
+      unsub();
+      unsubGdrive();
+    };
   }, [orderId]);
 
   useEffect(() => {
@@ -162,6 +173,18 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
                     >
                       <Download className="w-5 h-5" />
                       Unduh Foto 4R (300 DPI PNG)
+                    </a>
+                  )}
+
+                  {gdriveMeta?.folderUrl && (
+                    <a
+                      href={gdriveMeta.folderUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="whoops-btn whoops-btn-secondary w-full py-3 text-sm inline-flex items-center justify-center gap-2 mt-2.5"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Buka Folder Google Drive (Foto Mentah + 4R)
                     </a>
                   )}
                 </>
