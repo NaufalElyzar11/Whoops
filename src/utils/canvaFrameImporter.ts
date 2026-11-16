@@ -383,3 +383,182 @@ export function generateCanvaTemplateGuidePng(slots: SlotRect[] = DEFAULT_SLOTS)
 
   return canvas.toDataURL('image/png');
 }
+
+/**
+ * Extracts normalized rectangular photo window regions from a binary pixel mask (1 = hole/placeholder).
+ * Filters out tiny speckles and full-canvas outer margins, then sorts top-to-bottom, left-to-right.
+ */
+export function detectBoundingBoxesFromMask(
+  mask: Uint8Array,
+  width: number,
+  height: number
+): SlotRect[] {
+  const visited = new Uint8Array(width * height);
+  const queue = new Int32Array(width * height);
+  const boxes: Array<{ x: number; y: number; width: number; height: number; area: number }> = [];
+  const totalPixels = width * height;
+
+  for (let startIdx = 0; startIdx < totalPixels; startIdx++) {
+    if (mask[startIdx] !== 1 || visited[startIdx] === 1) continue;
+
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = startIdx;
+    visited[startIdx] = 1;
+
+    let minX = width;
+    let maxX = 0;
+    let minY = height;
+    let maxY = 0;
+    let area = 0;
+
+    while (head < tail) {
+      const idx = queue[head++];
+      const x = idx % width;
+      const y = (idx - x) / width;
+
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      area++;
+
+      if (x > 0) {
+        const left = idx - 1;
+        if (mask[left] === 1 && visited[left] === 0) {
+          visited[left] = 1;
+          queue[tail++] = left;
+        }
+      }
+      if (x + 1 < width) {
+        const right = idx + 1;
+        if (mask[right] === 1 && visited[right] === 0) {
+          visited[right] = 1;
+          queue[tail++] = right;
+        }
+      }
+      if (y > 0) {
+        const up = idx - width;
+        if (mask[up] === 1 && visited[up] === 0) {
+          visited[up] = 1;
+          queue[tail++] = up;
+        }
+      }
+      if (y + 1 < height) {
+        const down = idx + width;
+        if (mask[down] === 1 && visited[down] === 0) {
+          visited[down] = 1;
+          queue[tail++] = down;
+        }
+      }
+    }
+
+    const bw = (maxX - minX + 1) / width;
+    const bh = (maxY - minY + 1) / height;
+    const areaPct = area / totalPixels;
+    const edgeTouches =
+      (minX <= 1 ? 1 : 0) +
+      (minY <= 1 ? 1 : 0) +
+      (maxX >= width - 2 ? 1 : 0) +
+      (maxY >= height - 2 ? 1 : 0);
+
+    // Exclude outer transparent/border canvas margins and tiny noise specks
+    if (
+      edgeTouches < 2 &&
+      bw >= 0.1 &&
+      bh >= 0.07 &&
+      areaPct >= 0.015 &&
+      areaPct <= 0.85 &&
+      !(bw > 0.94 && bh > 0.94)
+    ) {
+      boxes.push({
+        x: Math.max(0.01, minX / width),
+        y: Math.max(0.01, minY / height),
+        width: Math.min(0.98, bw),
+        height: Math.min(0.98, bh),
+        area,
+      });
+    }
+  }
+
+  // Keep up to 8 largest candidate boxes sorted in natural reading order (row bands then left-to-right)
+  const topBoxes = boxes
+    .sort((a, b) => b.area - a.area)
+    .slice(0, 8)
+    .sort((a, b) => {
+      if (Math.abs(a.y - b.y) > 0.08) return a.y - b.y;
+      return a.x - b.x;
+    });
+
+  return topBoxes.map((b, slotIndex) => ({
+    slotIndex,
+    x: Number(b.x.toFixed(3)),
+    y: Number(b.y.toFixed(3)),
+    width: Number(b.width.toFixed(3)),
+    height: Number(b.height.toFixed(3)),
+  }));
+}
+
+export interface CanvaInspectResult {
+  hasInteriorTransparency: boolean;
+  detectedSlots: SlotRect[];
+}
+
+/**
+ * Inspects an uploaded Canva design on a fast analysis canvas to automatically spot
+ * transparent cutout holes (Canva Pro) or solid placeholder boxes (e.g. white/green in Canva Gratis).
+ */
+export async function inspectCanvaSourceForSlots(
+  sourceDataUrl: string,
+  fitMode: CanvaFitMode,
+  mode: 'transparent' | 'color',
+  targetHex = '#FFFFFF',
+  tolerance = 32
+): Promise<CanvaInspectResult> {
+  const img = await loadImage(sourceDataUrl);
+  const w = 241;
+  const h = 359;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return { hasInteriorTransparency: false, detectedSlots: [] };
+
+  ctx.clearRect(0, 0, w, h);
+  drawFittedImage(ctx, img, w, h, fitMode);
+  const data = ctx.getImageData(0, 0, w, h).data;
+
+  const mask = new Uint8Array(w * h);
+  let transparentInteriorCount = 0;
+  const marginX = Math.round(w * 0.05);
+  const marginY = Math.round(h * 0.05);
+  const target = hexToRgb(targetHex);
+  const maxDistSq = tolerance * tolerance * 3;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      const p = idx * 4;
+      const alpha = data[p + 3];
+      const isInterior = x >= marginX && x < w - marginX && y >= marginY && y < h - marginY;
+
+      if (alpha < 45) {
+        if (isInterior) transparentInteriorCount++;
+        if (mode === 'transparent') mask[idx] = 1;
+      } else if (mode === 'color') {
+        const dr = data[p] - target.r;
+        const dg = data[p + 1] - target.g;
+        const db = data[p + 2] - target.b;
+        if (dr * dr + dg * dg + db * db <= maxDistSq) {
+          mask[idx] = 1;
+        }
+      }
+    }
+  }
+
+  const interiorTotal = (w - 2 * marginX) * (h - 2 * marginY);
+  const hasInteriorTransparency = transparentInteriorCount / Math.max(1, interiorTotal) > 0.04;
+  const detectedSlots = detectBoundingBoxesFromMask(mask, w, h);
+
+  return { hasInteriorTransparency, detectedSlots };
+}
