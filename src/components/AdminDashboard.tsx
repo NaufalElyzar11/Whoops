@@ -74,6 +74,7 @@ import {
   normalizeVoucherCode,
   voucherToPackage,
 } from '../utils/voucher';
+import { getFrameSlotCount } from '../utils/frameLayouts';
 import { DoodleStudioModal } from './DoodleStudioModal';
 import { FramePreviewCanvas } from './FramePreviewCanvas';
 import { OrderQrModal } from './OrderQrModal';
@@ -1712,8 +1713,11 @@ export function AdminDashboard({
                 >
                   <div>
                     <FramePreviewCanvas frame={f} maxWidthClass="max-w-[165px]" />
-                    <div className="mt-3 flex items-center justify-center gap-1.5">
+                    <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
                       <span className="text-xs text-[#61433B]">{f.category}</span>
+                      <span className="px-1.5 py-0.5 rounded border border-[#3A231E]/40 bg-white text-[10px] font-display font-bold text-[#3A231E]">
+                        {getFrameSlotCount(f)} Foto
+                      </span>
                       <span
                         className={`px-1.5 py-0.5 rounded border border-[#3A231E]/40 text-[10px] font-display font-bold ${
                           f.type === 'image'

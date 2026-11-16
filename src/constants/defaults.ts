@@ -84,6 +84,19 @@ export const DEFAULT_FRAMES: PhotoFrame[] = [
     active: true,
     sortOrder: 3,
   },
+  {
+    id: 'f-4',
+    name: 'Seoul 3-Cut Retro Strip',
+    category: '3-Cut Vertical',
+    type: 'vector',
+    bg: '#FDF7EE',
+    trim: '#6D1D3A',
+    labelColor: '#6D1D3A',
+    overlayImageData: '',
+    layoutId: '3-vertical',
+    active: true,
+    sortOrder: 4,
+  },
 ];
 
 export function rupiah(n: number | undefined | null): string {

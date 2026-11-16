@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { Check, Sparkles } from 'lucide-react';
 import type { PhotoFrame } from '../../types';
+import { getFrameSlotCount } from '../../utils/frameLayouts';
 import { FramePreviewCanvas } from '../FramePreviewCanvas';
 
 interface FrameStepProps {
@@ -38,7 +39,7 @@ export function FrameStep({
             Pilih Frame Favoritmu
           </h1>
           <p className="text-sm text-[#61433B] mt-0.5">
-            Koleksi frame 6-slot yang siap dicetak pada kertas 4R.
+            Pilih frame favoritmu dengan variasi jumlah foto (2, 3, 4, hingga 6+ slot) siap cetak 4R.
           </p>
         </div>
 
@@ -100,8 +101,13 @@ export function FrameStep({
                     )}
                   </div>
                   <div className="mt-3">
-                    <div className="text-xs text-[#6D1D3A] font-display font-semibold">
-                      {f.category}
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-[#6D1D3A] font-display font-semibold truncate">
+                        {f.category}
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-[#EFE2CE] border border-[#3A231E]/50 text-[10px] font-display font-bold text-[#3A231E] shrink-0">
+                        {getFrameSlotCount(f)} Foto
+                      </span>
                     </div>
                     <h2 className="font-display font-bold text-lg text-[#3A231E] mt-0.5">
                       {f.name}

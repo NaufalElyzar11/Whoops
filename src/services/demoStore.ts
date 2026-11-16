@@ -1,3 +1,4 @@
+import { decodeFrameFromFirestore } from '../utils/frameLayouts';
 import {
   DEFAULT_FRAMES,
   DEFAULT_PACKAGES,
@@ -43,7 +44,7 @@ function getInitialDemoState(): DemoStoreState {
   return {
     settings: { ...DEFAULT_STORE_SETTINGS },
     packages: DEFAULT_PACKAGES.map((p) => ({ ...p })),
-    frames: DEFAULT_FRAMES.map((f) => ({ ...f })),
+    frames: DEFAULT_FRAMES.map((f) => decodeFrameFromFirestore({ ...f })),
     orders: [],
     hasCustomCatalog: false,
   };
@@ -57,7 +58,9 @@ export function loadDemoState(): DemoStoreState {
     return {
       settings: parsed.settings || { ...DEFAULT_STORE_SETTINGS },
       packages: Array.isArray(parsed.packages) ? parsed.packages : DEFAULT_PACKAGES,
-      frames: Array.isArray(parsed.frames) ? parsed.frames : DEFAULT_FRAMES,
+      frames: Array.isArray(parsed.frames)
+        ? parsed.frames.map((f) => decodeFrameFromFirestore(f))
+        : DEFAULT_FRAMES.map((f) => decodeFrameFromFirestore(f)),
       orders: Array.isArray(parsed.orders) ? parsed.orders : [],
       hasCustomCatalog: Boolean(parsed.hasCustomCatalog),
     };

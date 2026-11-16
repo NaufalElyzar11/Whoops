@@ -1,3 +1,6 @@
+export const CANVAS_4R_WIDTH = 1205;
+export const CANVAS_4R_HEIGHT = 1795;
+
 export interface SlotRect {
   slotIndex: number;
   x: number;
@@ -81,6 +84,19 @@ export interface VoucherCode {
   isActive: boolean;
 }
 
+export type FrameLayoutId =
+  | '1-hero'
+  | '2-vertical'
+  | '2-grid'
+  | '3-vertical'
+  | '3-collage'
+  | '4-grid'
+  | '4-strip'
+  | '5-collage'
+  | '6-grid'
+  | '8-grid'
+  | 'custom';
+
 export interface PhotoFrame {
   id: string;
   name: string;
@@ -92,6 +108,8 @@ export interface PhotoFrame {
   overlayImageData: string;
   active: boolean;
   sortOrder: number;
+  layoutId?: FrameLayoutId;
+  slots?: SlotRect[];
   updatedAt?: unknown;
 }
 

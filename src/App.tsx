@@ -35,7 +35,7 @@ const SESSION_DURATION_SECONDS = 360; // 6 minutes per booth session
 const STEP_LABELS: Partial<Record<BoothStep, string>> = {
   frame: '1/5 Pilih Frame',
   camera: '2/5 Kamera & Retake',
-  editor: '3/5 Edit 6 Slot',
+  editor: '3/5 Edit & Susun Foto',
   preview: '4/5 Final Preview',
   checkout: '5/5 Paket & Kasir',
 };

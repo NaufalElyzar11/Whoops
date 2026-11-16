@@ -28,6 +28,10 @@ import type {
   WorkflowStatus,
 } from '../types';
 import { chunkDataUrl } from '../utils/canvasEngine';
+import {
+  decodeFrameFromFirestore,
+  encodeFrameForFirestore,
+} from '../utils/frameLayouts';
 
 export function subscribeStoreSettings(
   onData: (settings: StoreSettings, existsInCloud: boolean) => void
@@ -80,7 +84,9 @@ export function subscribeFrames(
       if (snap.empty) {
         onData([], false);
       } else {
-        const items = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<PhotoFrame, 'id'>) }));
+        const items = snap.docs.map((d) =>
+          decodeFrameFromFirestore({ id: d.id, ...(d.data() as Omit<PhotoFrame, 'id'>) })
+        );
         onData(items, true);
       }
     },
@@ -169,14 +175,15 @@ export async function seedInitialCatalogIfEmpty(): Promise<void> {
 
     if (framesSnap.empty) {
       for (const fr of DEFAULT_FRAMES) {
+        const encoded = encodeFrameForFirestore(fr);
         batch.set(doc(db, 'frames', fr.id), {
           name: fr.name,
           category: fr.category,
           type: fr.type,
-          bg: fr.bg,
-          trim: fr.trim,
-          labelColor: fr.labelColor,
-          overlayImageData: fr.overlayImageData,
+          bg: encoded.bg,
+          trim: encoded.trim,
+          labelColor: encoded.labelColor,
+          overlayImageData: encoded.overlayImageData,
           active: fr.active,
           sortOrder: fr.sortOrder,
           updatedAt: serverTimestamp(),
@@ -476,15 +483,16 @@ export async function deletePackage(packageId: string): Promise<void> {
 
 export async function saveFrame(frame: PhotoFrame): Promise<void> {
   const path = `frames/${frame.id}`;
+  const encoded = encodeFrameForFirestore(frame);
   try {
     await setDoc(doc(db, 'frames', frame.id), {
       name: frame.name.trim().slice(0, 100) || 'Frame Baru',
       category: frame.category.trim().slice(0, 50) || 'Custom',
       type: frame.type === 'image' ? 'image' : 'vector',
-      bg: frame.bg.slice(0, 20) || '#6D1D3A',
-      trim: frame.trim.slice(0, 20) || '#FDF7EE',
-      labelColor: frame.labelColor.slice(0, 20) || '#FDF7EE',
-      overlayImageData: (frame.overlayImageData || '').slice(0, 750000),
+      bg: encoded.bg,
+      trim: encoded.trim,
+      labelColor: encoded.labelColor,
+      overlayImageData: encoded.overlayImageData,
       active: Boolean(frame.active),
       sortOrder: Number(frame.sortOrder) || 1,
       updatedAt: serverTimestamp(),

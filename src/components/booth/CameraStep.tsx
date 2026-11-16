@@ -12,7 +12,6 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { CapturedPhoto } from '../../types';
-import { SLOT_ASPECT_RATIO } from '../../utils/canvasEngine';
 
 export interface RetakeTarget {
   photoId: string;
@@ -22,6 +21,8 @@ export interface RetakeTarget {
 
 interface CameraStepProps {
   photos: CapturedPhoto[];
+  requiredPhotoCount: number;
+  slotAspectRatio: number;
   mirrorPreview: boolean;
   setMirrorPreview: (updater: (v: boolean) => boolean) => void;
   saveMirrored: boolean;
@@ -48,6 +49,8 @@ interface CameraStepProps {
 
 export function CameraStep({
   photos,
+  requiredPhotoCount,
+  slotAspectRatio,
   mirrorPreview,
   setMirrorPreview,
   saveMirrored,
@@ -103,7 +106,7 @@ export function CameraStep({
           </div>
 
           <span className="text-xs font-display font-semibold text-[#6D1D3A] tabular-nums">
-            Tersimpan: {photos.length} foto
+            Target: {requiredPhotoCount} slot | Tersimpan: {photos.length} foto
           </span>
         </div>
 
@@ -138,8 +141,8 @@ export function CameraStep({
         <div className="flex justify-center">
           <div
             style={{
-              aspectRatio: String(SLOT_ASPECT_RATIO),
-              width: `min(100%, calc(min(54dvh, 450px) * ${SLOT_ASPECT_RATIO}))`,
+              aspectRatio: String(slotAspectRatio),
+              width: `min(100%, calc(min(54dvh, 450px) * ${slotAspectRatio}))`,
             }}
             className="relative bg-[#2a1713] border-2 border-[#3A231E] rounded-2xl overflow-hidden shadow-[3px_3px_0_#3A231E]"
           >
@@ -388,7 +391,7 @@ export function CameraStep({
 
           {photos.length === 0 ? (
             <div className="p-6 text-center text-xs text-[#61433B] bg-[#EFE2CE] rounded-2xl border-2 border-dashed border-[#3A231E]/50">
-              Tekan <b>CAPTURE (3s)</b> atau <b>Ambil Pose Demo</b> untuk mulai memotret. Kamu bebas mengambil lebih dari 6 foto lalu memilih pose terbaik!
+              Tekan <b>CAPTURE (3s)</b> atau <b>Ambil Pose Demo</b> untuk mulai memotret. Kamu bebas mengambil lebih dari {requiredPhotoCount} foto lalu memilih pose terbaik!
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2.5 max-h-[340px] md:max-h-[390px] overflow-y-auto whoops-scroll pr-1">
@@ -408,7 +411,7 @@ export function CameraStep({
                     }`}
                   >
                     <div
-                      style={{ aspectRatio: String(SLOT_ASPECT_RATIO) }}
+                      style={{ aspectRatio: String(slotAspectRatio) }}
                       className="relative overflow-hidden"
                     >
                       <img
@@ -460,7 +463,7 @@ export function CameraStep({
               onClick={onCaptureDemoSixAndProceed}
               className="whoops-btn whoops-btn-secondary w-full py-2.5 text-sm cursor-pointer"
             >
-              Isi Cepat 6 Pose Demo & Lanjut
+              Isi Cepat {requiredPhotoCount} Pose Demo &amp; Lanjut
             </button>
           )}
           <motion.button
@@ -473,10 +476,10 @@ export function CameraStep({
             {retakeTarget?.returnToEditor ? (
               <>
                 <ArrowLeft className="w-4 h-4" aria-hidden="true" />
-                <span>Kembali ke Editor 6 Slot</span>
+                <span>Kembali ke Editor {requiredPhotoCount} Slot</span>
               </>
             ) : (
-              <span>Susun 6 Slot Foto</span>
+              <span>Susun {requiredPhotoCount} Slot Foto</span>
             )}
           </motion.button>
         </div>

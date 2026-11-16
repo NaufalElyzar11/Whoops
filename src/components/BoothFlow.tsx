@@ -24,6 +24,10 @@ import {
   createDemoPosePhoto,
 } from '../utils/canvasEngine';
 import {
+  getFrameSlotCount,
+  getSlotAspectRatio,
+} from '../utils/frameLayouts';
+import {
   appendVoucherNote,
   calculateVoucherDiscount,
   normalizeVoucherCode,
@@ -54,8 +58,8 @@ interface BoothFlowProps {
   onSelectedPackageChange: (pkgName: string | null) => void;
 }
 
-const createInitialAssignments = (): SlotAssignment[] =>
-  Array.from({ length: 6 }, (_, i) => ({
+const createInitialAssignments = (slotCount = 6): SlotAssignment[] =>
+  Array.from({ length: slotCount }, (_, i) => ({
     slotIndex: i,
     photoId: null,
     filter: 'original',
@@ -124,6 +128,8 @@ export function BoothFlow({
   const selectedPkg =
     packages.find((p) => p.id === selectedPkgId) || activePkgs[0] || null;
   const selectedFrame = frames.find((f) => f.id === selectedFrameId) || null;
+  const frameSlotCount = getFrameSlotCount(selectedFrame);
+  const slotAspectRatio = getSlotAspectRatio(selectedFrame);
   const appliedVoucher = appliedVoucherCode
     ? vouchers.find((v) => v.isActive && v.code === appliedVoucherCode) || null
     : null;
@@ -276,7 +282,23 @@ export function BoothFlow({
   }, [resetAllSessionState, onResetSessionTimer, setStep]);
 
   const handleChooseFrame = (frame: PhotoFrame) => {
+    const targetCount = getFrameSlotCount(frame);
     setSelectedFrameId(frame.id);
+    setAssignments((prev) =>
+      Array.from({ length: targetCount }, (_, i) => {
+        const existing = prev[i];
+        return existing
+          ? { ...existing, slotIndex: i }
+          : {
+              slotIndex: i,
+              photoId: null,
+              filter: 'original',
+              brightness: 0,
+              mirrored: false,
+            };
+      })
+    );
+    setSelectedSlotIndex((prevIdx) => (prevIdx < targetCount ? prevIdx : 0));
     setStep('camera');
   };
 
@@ -302,17 +324,17 @@ export function BoothFlow({
       : photos.length + 1;
     // Slightly vary demo pose index when retaking so replacement is immediately obvious
     const variantNum = activeRetake ? poseNum + 1 : poseNum;
-    commitCapturedDataUrl(createDemoPosePhoto(variantNum));
+    commitCapturedDataUrl(createDemoPosePhoto(variantNum, slotAspectRatio));
   };
 
   const captureDemoSixAndProceed = () => {
     setPhotos((prev) => {
       const next = [...prev];
-      while (next.length < 6) {
+      while (next.length < frameSlotCount) {
         const idx = next.length + 1;
         next.push({
           id: `p-${Date.now()}-${idx}`,
-          dataUrl: createDemoPosePhoto(idx),
+          dataUrl: createDemoPosePhoto(idx, slotAspectRatio),
         });
       }
       return next;
@@ -342,7 +364,7 @@ export function BoothFlow({
         setShutterFlash(true);
         window.setTimeout(() => setShutterFlash(false), 220);
 
-        const dataUrl = captureVideoSlotFrame(video, saveMirrored);
+        const dataUrl = captureVideoSlotFrame(video, saveMirrored, slotAspectRatio);
         if (dataUrl) {
           commitCapturedDataUrl(dataUrl);
         }
@@ -366,7 +388,7 @@ export function BoothFlow({
 
   const handleClearAllPhotos = () => {
     setPhotos([]);
-    setAssignments(createInitialAssignments());
+    setAssignments(createInitialAssignments(frameSlotCount));
     setRetakeTarget(null);
     setLastCapturedId(null);
     setSelectedTrayPhotoId(null);
@@ -591,6 +613,8 @@ export function BoothFlow({
       return (
         <CameraStep
           photos={photos}
+          requiredPhotoCount={frameSlotCount}
+          slotAspectRatio={slotAspectRatio}
           mirrorPreview={mirrorPreview}
           setMirrorPreview={setMirrorPreview}
           saveMirrored={saveMirrored}
@@ -626,6 +650,7 @@ export function BoothFlow({
       return (
         <EditorStep
           selectedFrame={selectedFrame}
+          slotAspectRatio={slotAspectRatio}
           photos={photos}
           assignments={assignments}
           selectedTrayPhotoId={selectedTrayPhotoId}

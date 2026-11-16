@@ -16,11 +16,12 @@ import {
   type PhotoFrame,
   type SlotAssignment,
 } from '../../types';
-import { getCssFilter, SLOT_ASPECT_RATIO } from '../../utils/canvasEngine';
+import { getCssFilter } from '../../utils/canvasEngine';
 import { FramePreviewCanvas } from '../FramePreviewCanvas';
 
 interface EditorStepProps {
   selectedFrame: PhotoFrame;
+  slotAspectRatio: number;
   photos: CapturedPhoto[];
   assignments: SlotAssignment[];
   selectedTrayPhotoId: string | null;
@@ -46,6 +47,7 @@ type DragState =
 
 export function EditorStep({
   selectedFrame,
+  slotAspectRatio,
   photos,
   assignments,
   selectedTrayPhotoId,
@@ -64,9 +66,11 @@ export function EditorStep({
   onRetakeSlotPhoto,
   onGoFinalPreview,
 }: EditorStepProps) {
+  const slotCount = Math.max(1, assignments.length);
+  const safeSlotIndex = Math.min(selectedSlotIndex, slotCount - 1);
   const filledCount = assignments.filter((a) => a.photoId !== null).length;
-  const curAssign = assignments[selectedSlotIndex];
-  const curPhoto = curAssign.photoId
+  const curAssign = assignments[safeSlotIndex] || assignments[0];
+  const curPhoto = curAssign?.photoId
     ? photos.find((p) => p.id === curAssign.photoId) || null
     : null;
 
@@ -219,10 +223,10 @@ export function EditorStep({
         <div className="whoops-card p-3.5 sm:p-4 h-full flex flex-col justify-between overflow-hidden">
           <div className="flex items-center justify-between gap-2 shrink-0 pb-2">
             <span className="font-display font-bold text-sm sm:text-base text-[#3A231E] tabular-nums">
-              Kanvas 6 Slot ({filledCount}/6)
+              Kanvas {slotCount} Slot ({filledCount}/{slotCount})
             </span>
             <span className="px-2.5 py-0.5 rounded-lg bg-[#F3D2DB] border border-[#3A231E] text-xs font-display font-bold text-[#6D1D3A]">
-              Slot #{selectedSlotIndex + 1}
+              Slot #{safeSlotIndex + 1}
             </span>
           </div>
 
@@ -230,7 +234,7 @@ export function EditorStep({
             <FramePreviewCanvas
               frame={selectedFrame}
               fitContainer
-              selectedSlotIndex={selectedSlotIndex}
+              selectedSlotIndex={safeSlotIndex}
               dragOverSlotIndex={dragOverSlot}
               onSlotClick={(idx) => {
                 if (suppressClickRef.current) return;
@@ -239,7 +243,7 @@ export function EditorStep({
               onSlotDrop={onDropSlot}
               renderSlotContent={(slotIdx) => {
                 const a = assignments[slotIdx];
-                const ph = a.photoId ? photos.find((p) => p.id === a.photoId) : null;
+                const ph = a?.photoId ? photos.find((p) => p.id === a.photoId) : null;
                 if (!ph) {
                   return (
                     <span className="px-1 leading-tight">
@@ -353,7 +357,7 @@ export function EditorStep({
                         if (suppressClickRef.current) return;
                         setSelectedTrayPhotoId((prev) => (prev === p.id ? null : p.id));
                       }}
-                      style={{ aspectRatio: String(SLOT_ASPECT_RATIO) }}
+                      style={{ aspectRatio: String(slotAspectRatio) }}
                       className={`relative w-full rounded-xl overflow-hidden border-2 cursor-pointer bg-[#EFE2CE] text-left transition-all ${
                         isSelected
                           ? 'border-[#6D1D3A] ring-3 ring-[#E4A3B3] -translate-y-0.5'
@@ -385,7 +389,7 @@ export function EditorStep({
             <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <div>
                 <h2 className="font-display font-bold text-base sm:text-lg text-[#3A231E]">
-                  2. Edit Filter Slot #{selectedSlotIndex + 1}
+                  2. Edit Filter Slot #{safeSlotIndex + 1}
                 </h2>
                 <p className="text-xs text-[#61433B]">
                   Filter hanya diterapkan ke hasil akhir, foto asli tetap aman.
@@ -396,7 +400,7 @@ export function EditorStep({
                 <div className="flex flex-wrap gap-1.5">
                   <button
                     type="button"
-                    onClick={() => onRetakeSlotPhoto(curPhoto.id, selectedSlotIndex)}
+                    onClick={() => onRetakeSlotPhoto(curPhoto.id, safeSlotIndex)}
                     className="whoops-btn whoops-btn-secondary whoops-btn-compact px-2.5 py-1.5 text-xs inline-flex items-center gap-1 cursor-pointer"
                   >
                     <Camera className="w-3.5 h-3.5" aria-hidden="true" />
@@ -424,7 +428,7 @@ export function EditorStep({
 
             {!curPhoto ? (
               <div className="p-6 text-center text-xs text-[#61433B] bg-[#EFE2CE] rounded-xl border border-dashed border-[#3A231E]/50">
-                Slot #{selectedSlotIndex + 1} masih kosong. Pilih foto dari Galeri Foto di atas lalu ketuk slot di preview kiri.
+                Slot #{safeSlotIndex + 1} masih kosong. Pilih foto dari Galeri Foto di atas lalu ketuk slot di preview kiri.
               </div>
             ) : (
               <>
@@ -445,7 +449,7 @@ export function EditorStep({
                         }`}
                       >
                         <div
-                          style={{ aspectRatio: String(SLOT_ASPECT_RATIO) }}
+                          style={{ aspectRatio: String(slotAspectRatio) }}
                           className="relative rounded-lg overflow-hidden border border-[#3A231E]/40 bg-[#EFE2CE] mb-1.5"
                         >
                           <img
@@ -546,9 +550,9 @@ export function EditorStep({
               ))}
             </div>
             <span className="text-xs font-display font-semibold text-[#61433B] tabular-nums">
-              {filledCount < 6
-                ? `Isi ${6 - filledCount} slot lagi untuk lanjut`
-                : 'Semua 6 slot siap!'}
+              {filledCount < slotCount
+                ? `Isi ${slotCount - filledCount} slot lagi untuk lanjut`
+                : `Semua ${slotCount} slot siap!`}
             </span>
           </div>
 
@@ -556,10 +560,10 @@ export function EditorStep({
             type="button"
             whileTap={{ scale: 0.97 }}
             onClick={onGoFinalPreview}
-            disabled={filledCount < 6}
+            disabled={filledCount < slotCount}
             className="whoops-btn whoops-btn-primary px-6 py-3 text-sm sm:text-base cursor-pointer ml-auto"
           >
-            Lihat Final Preview ({filledCount}/6)
+            Lihat Final Preview ({filledCount}/{slotCount})
           </motion.button>
         </div>
       </div>
@@ -568,7 +572,7 @@ export function EditorStep({
       {pointerDrag && (
         <div
           className="fixed pointer-events-none z-50 w-24 rounded-xl overflow-hidden border-2 border-[#6D1D3A] shadow-[4px_4px_0_#3A231E] -translate-x-1/2 -translate-y-1/2 rotate-3 opacity-95"
-          style={{ left: pointerDrag.x, top: pointerDrag.y, aspectRatio: String(SLOT_ASPECT_RATIO) }}
+          style={{ left: pointerDrag.x, top: pointerDrag.y, aspectRatio: String(slotAspectRatio) }}
         >
           <img src={pointerDrag.previewUrl} alt="" className="w-full h-full object-cover" />
         </div>

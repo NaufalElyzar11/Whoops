@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { ArrowLeft, Check, Loader2, Sparkles } from 'lucide-react';
 import type { PhotoFrame } from '../../types';
+import { getFrameSlotCount } from '../../utils/frameLayouts';
 
 interface PreviewStepProps {
   selectedFrame: PhotoFrame;
@@ -17,6 +18,8 @@ export function PreviewStep({
   onEditAgain,
   onConfirmPhoto,
 }: PreviewStepProps) {
+  const slotCount = getFrameSlotCount(selectedFrame);
+
   return (
     <section className="max-w-4xl mx-auto">
       <motion.div
@@ -35,7 +38,7 @@ export function PreviewStep({
                   <span className="font-display font-semibold text-sm text-[#3A231E]">
                     Merender 4R 300 DPI...
                   </span>
-                  <span>Menyatukan 6 foto & filter pilihanmu</span>
+                  <span>Menyatukan {slotCount} foto &amp; filter pilihanmu</span>
                 </div>
               ) : (
                 <motion.img
@@ -61,13 +64,15 @@ export function PreviewStep({
               Final Preview
             </h1>
             <p className="text-sm text-[#61433B] mt-1.5 leading-relaxed">
-              Periksa kembali posisi 6 foto, filter, dan frame pilihanmu sebelum lanjut memilih paket dan menuju meja kasir.
+              Periksa kembali posisi {slotCount} foto, filter, dan frame pilihanmu sebelum lanjut memilih paket dan menuju meja kasir.
             </p>
 
             <div className="mt-5 bg-[#EFE2CE]/70 border-2 border-[#3A231E] rounded-2xl p-4 text-left space-y-2 text-xs sm:text-sm">
               <div className="flex justify-between gap-3">
                 <span className="text-[#61433B]">Frame Pilihan</span>
-                <b className="font-display text-[#3A231E] text-right">{selectedFrame.name}</b>
+                <b className="font-display text-[#3A231E] text-right">
+                  {selectedFrame.name} ({slotCount} Foto)
+                </b>
               </div>
               <div className="flex justify-between gap-3">
                 <span className="text-[#61433B]">Ukuran & Resolusi</span>

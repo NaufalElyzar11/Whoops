@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { DEFAULT_SLOTS, type PhotoFrame } from '../types';
+import type { PhotoFrame } from '../types';
+import { getFrameSlots } from '../utils/frameLayouts';
 
 interface FramePreviewCanvasProps {
   frame: PhotoFrame;
@@ -23,6 +24,7 @@ export function FramePreviewCanvas({
   dragOverSlotIndex = null,
 }: FramePreviewCanvasProps) {
   const maskId = `cutout-preview-${frame.id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const slots = getFrameSlots(frame);
 
   const frameCanvas = (
     <div
@@ -38,7 +40,7 @@ export function FramePreviewCanvas({
         fitContainer ? '' : `w-full ${maxWidthClass} aspect-[1205/1795] mx-auto`
       } bg-white border-2 border-[#3A231E] rounded-[18px] overflow-hidden select-none shadow-[3px_3px_0_rgba(58,35,30,0.2)]`}
     >
-      {DEFAULT_SLOTS.map((s) => {
+      {slots.map((s) => {
         const isSelected = selectedSlotIndex === s.slotIndex;
         const isDragOver = dragOverSlotIndex === s.slotIndex;
         const customContent = renderSlotContent ? renderSlotContent(s.slotIndex) : null;
@@ -105,7 +107,7 @@ export function FramePreviewCanvas({
           <defs>
             <mask id={maskId}>
               <rect width="1205" height="1795" fill="white" />
-              {DEFAULT_SLOTS.map((s) => (
+              {slots.map((s) => (
                 <rect
                   key={s.slotIndex}
                   x={s.x * 1205}
@@ -129,7 +131,7 @@ export function FramePreviewCanvas({
             stroke={frame.trim}
             strokeWidth="6"
           />
-          {DEFAULT_SLOTS.map((s) => (
+          {slots.map((s) => (
             <rect
               key={s.slotIndex}
               x={s.x * 1205}

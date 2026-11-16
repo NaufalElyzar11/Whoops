@@ -267,8 +267,10 @@ export function encodeOverlayWithinLimit(
 
 export async function processCanvaFrameSource(
   sourceDataUrl: string,
-  options: CanvaImportOptions
+  options: CanvaImportOptions,
+  slots: SlotRect[] = DEFAULT_SLOTS
 ): Promise<CanvaProcessResult> {
+  const safeSlots = slots.length > 0 ? slots : DEFAULT_SLOTS;
   const img = await loadImage(sourceDataUrl);
   const canvas = document.createElement('canvas');
   canvas.width = CANVAS_4R_WIDTH;
@@ -280,7 +282,7 @@ export async function processCanvaFrameSource(
   drawFittedImage(ctx, img, canvas.width, canvas.height, options.fitMode);
 
   if (options.cutoutMode === 'auto_cut_slots') {
-    punchSlotWindows(ctx, canvas.width, canvas.height, DEFAULT_SLOTS);
+    punchSlotWindows(ctx, canvas.width, canvas.height, safeSlots);
   } else if (options.cutoutMode === 'chroma_key') {
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     applyChromaKeyToRgba(
@@ -290,7 +292,7 @@ export async function processCanvaFrameSource(
       options.chromaHex,
       options.chromaTolerance,
       options.chromaOnlyNearSlots,
-      DEFAULT_SLOTS
+      safeSlots
     );
     ctx.putImageData(imgData, 0, 0);
   }
@@ -314,28 +316,26 @@ export function readFileAsDataUrl(file: File): Promise<string> {
 }
 
 /**
- * Generates a downloadable 1205x1795 transparent PNG guide for designing frames in Canva.
+ * Generates a downloadable 1205x1795 PNG template guide matching the selected number & layout of photo slots.
  */
-export function generateCanvaTemplateGuidePng(): string {
+export function generateCanvaTemplateGuidePng(slots: SlotRect[] = DEFAULT_SLOTS): string {
+  const safeSlots = slots.length > 0 ? slots : DEFAULT_SLOTS;
   const canvas = document.createElement('canvas');
   canvas.width = CANVAS_4R_WIDTH;
   canvas.height = CANVAS_4R_HEIGHT;
   const ctx = canvas.getContext('2d');
   if (!ctx) return '';
 
-  // Warm paper background outside slots + translucent green/white window guides
   ctx.fillStyle = '#FDF7EE';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Outer trim margin
   ctx.strokeStyle = '#6D1D3A';
   ctx.lineWidth = 6;
   ctx.beginPath();
   ctx.roundRect(18, 18, canvas.width - 36, canvas.height - 36, 28);
   ctx.stroke();
 
-  // Draw 6 slot placeholder guides matching DEFAULT_SLOTS 1:1
-  DEFAULT_SLOTS.forEach((s) => {
+  safeSlots.forEach((s, idx) => {
     const x = s.x * canvas.width;
     const y = s.y * canvas.height;
     const w = s.width * canvas.width;
@@ -355,21 +355,25 @@ export function generateCanvaTemplateGuidePng(): string {
     ctx.stroke();
     ctx.restore();
 
+    const titleSize = Math.max(22, Math.min(36, Math.round(Math.min(w, h) * 0.1)));
     ctx.fillStyle = '#6D1D3A';
-    ctx.font = 'bold 34px sans-serif';
+    ctx.font = `bold ${titleSize}px sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillText(`AREA FOTO #${s.slotIndex + 1}`, x + w / 2, y + h / 2 - 6);
-    ctx.font = '22px sans-serif';
+    ctx.fillText(`AREA FOTO #${idx + 1}`, x + w / 2, y + h / 2 - 6);
+    ctx.font = `${Math.max(16, Math.round(titleSize * 0.62))}px sans-serif`;
     ctx.fillStyle = '#61433B';
-    ctx.fillText('(Biarkan kosong / kotak putih)', x + w / 2, y + h / 2 + 30);
+    ctx.fillText('(Biarkan kosong / kotak putih)', x + w / 2, y + h / 2 + titleSize * 0.85);
   });
 
-  // Bottom safe footer annotation
   ctx.fillStyle = '#6D1D3A';
-  ctx.font = 'bold 32px sans-serif';
+  ctx.font = 'bold 30px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText('AREA LOGO / STIKER / JUDUL BAWAH (1205 x 1795 px)', canvas.width / 2, 1690);
-  ctx.font = '24px sans-serif';
+  ctx.fillText(
+    `AREA LOGO / STIKER (${safeSlots.length} FOTO · 1205 x 1795 px)`,
+    canvas.width / 2,
+    1690
+  );
+  ctx.font = '22px sans-serif';
   ctx.fillStyle = '#61433B';
   ctx.fillText(
     'Timpa dengan desain Canva-mu -> Export PNG/JPG -> Upload ke Admin Whoops!',

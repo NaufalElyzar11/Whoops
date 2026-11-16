@@ -9,10 +9,11 @@ import {
   Palette,
   Plus,
   Scissors,
+  SlidersHorizontal,
   Sparkles,
   Upload,
 } from 'lucide-react';
-import type { PhotoFrame } from '../../types';
+import type { FrameLayoutId, PhotoFrame, SlotRect } from '../../types';
 import {
   generateCanvaTemplateGuidePng,
   processCanvaFrameSource,
@@ -23,6 +24,14 @@ import {
   type CanvaProcessResult,
 } from '../../utils/canvaFrameImporter';
 import { CANVAS_4R_HEIGHT, CANVAS_4R_WIDTH, loadImage } from '../../utils/canvasEngine';
+import {
+  cloneSlots,
+  FRAME_LAYOUT_PRESETS,
+  getDefaultLayoutForCount,
+  getPresetsForSlotCount,
+  normalizeSlots,
+  SUPPORTED_SLOT_COUNTS,
+} from '../../utils/frameLayouts';
 import { FramePreviewCanvas } from '../FramePreviewCanvas';
 
 interface CanvaFramePanelProps {
@@ -39,6 +48,8 @@ const SAMPLE_SLOT_SWATCHES = [
   { bg: '#F9E6C9', fg: '#6D1D3A', tag: 'Pose 4' },
   { bg: '#EFE2CE', fg: '#6D1D3A', tag: 'Pose 5' },
   { bg: '#F3D2DB', fg: '#3A231E', tag: 'Pose 6' },
+  { bg: '#F9E6C9', fg: '#3A231E', tag: 'Pose 7' },
+  { bg: '#E4A3B3', fg: '#6D1D3A', tag: 'Pose 8' },
 ];
 
 const QUICK_CATEGORIES = ['Canva Custom', 'Retro Classic', 'Cute Pastel', 'Event / Wedding'];
@@ -54,6 +65,13 @@ export function CanvaFramePanel({
   // Shared metadata
   const [frameName, setFrameName] = useState('');
   const [frameCategory, setFrameCategory] = useState('Canva Custom');
+
+  // Custom slot count & geometry
+  const [layoutId, setLayoutId] = useState<FrameLayoutId>('6-grid');
+  const [customSlots, setCustomSlots] = useState<SlotRect[]>(() =>
+    cloneSlots(FRAME_LAYOUT_PRESETS['6-grid'].slots)
+  );
+  const [showManualSlots, setShowManualSlots] = useState(false);
 
   // Vector fields
   const [vectorBg, setVectorBg] = useState('#6D1D3A');
@@ -90,13 +108,17 @@ export function CanvaFramePanel({
     setProcessError(null);
 
     const timer = window.setTimeout(() => {
-      processCanvaFrameSource(rawSourceUrl, {
-        cutoutMode,
-        fitMode,
-        chromaHex,
-        chromaTolerance,
-        chromaOnlyNearSlots,
-      })
+      processCanvaFrameSource(
+        rawSourceUrl,
+        {
+          cutoutMode,
+          fitMode,
+          chromaHex,
+          chromaTolerance,
+          chromaOnlyNearSlots,
+        },
+        customSlots
+      )
         .then((res) => {
           if (!cancelled) {
             setProcessed(res);
@@ -119,7 +141,7 @@ export function CanvaFramePanel({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [rawSourceUrl, cutoutMode, fitMode, chromaHex, chromaTolerance, chromaOnlyNearSlots]);
+  }, [rawSourceUrl, cutoutMode, fitMode, chromaHex, chromaTolerance, chromaOnlyNearSlots, customSlots]);
 
   // Cache an un-cut copy of the fitted raw Canva image so click-eyedropper picks exact colors
   useEffect(() => {
@@ -192,16 +214,43 @@ export function CanvaFramePanel({
     }
   };
 
+  const slotCount = customSlots.length;
+  const availablePresets = getPresetsForSlotCount(slotCount);
+
+  const handleSelectSlotCount = (count: number) => {
+    const presetKey = getDefaultLayoutForCount(count);
+    setLayoutId(presetKey);
+    setCustomSlots(cloneSlots(FRAME_LAYOUT_PRESETS[presetKey].slots));
+  };
+
+  const handleSelectPreset = (presetKey: Exclude<FrameLayoutId, 'custom'>) => {
+    setLayoutId(presetKey);
+    setCustomSlots(cloneSlots(FRAME_LAYOUT_PRESETS[presetKey].slots));
+  };
+
+  const handleUpdateSlotBox = (
+    slotIdx: number,
+    field: 'x' | 'y' | 'width' | 'height',
+    nextVal: number
+  ) => {
+    setLayoutId('custom');
+    setCustomSlots((prev) =>
+      normalizeSlots(
+        prev.map((s, idx) => (idx === slotIdx ? { ...s, [field]: nextVal } : s))
+      )
+    );
+  };
+
   const handleDownloadCanvaTemplate = () => {
-    const pngUrl = generateCanvaTemplateGuidePng();
+    const pngUrl = generateCanvaTemplateGuidePng(customSlots);
     if (!pngUrl) return;
     const a = document.createElement('a');
     a.href = pngUrl;
-    a.download = 'Template-Canva-WHOOPS-4R-1205x1795.png';
+    a.download = `Template-Canva-WHOOPS-${slotCount}Foto-1205x1795.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    onToast('Template panduan Canva 1205×1795 diunduh!');
+    onToast(`Template panduan Canva (${slotCount} foto, 1205×1795) diunduh!`);
   };
 
   const handleEyedropperClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -248,6 +297,8 @@ export function CanvaFramePanel({
         trim: '#3A231E',
         labelColor: '#3A231E',
         overlayImageData: processed.overlayDataUrl,
+        layoutId,
+        slots: cloneSlots(customSlots),
         active: true,
         sortOrder: framesCount + 1,
       };
@@ -268,6 +319,8 @@ export function CanvaFramePanel({
       trim: vectorTrim,
       labelColor: vectorLabelColor,
       overlayImageData: '',
+      layoutId,
+      slots: cloneSlots(customSlots),
       active: true,
       sortOrder: framesCount + 1,
     };
@@ -286,6 +339,8 @@ export function CanvaFramePanel({
           trim: vectorTrim,
           labelColor: vectorLabelColor,
           overlayImageData: '',
+          layoutId,
+          slots: customSlots,
           active: true,
           sortOrder: 99,
         }
@@ -298,6 +353,8 @@ export function CanvaFramePanel({
           trim: '#3A231E',
           labelColor: '#6D1D3A',
           overlayImageData: processed?.overlayDataUrl || '',
+          layoutId,
+          slots: customSlots,
           active: true,
           sortOrder: 99,
         };
@@ -322,10 +379,10 @@ export function CanvaFramePanel({
       <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#3A231E]/15">
         <div>
           <h3 className="font-display font-bold text-lg sm:text-xl text-[#3A231E]">
-            Tambah Frame Baru (Impor Canva &amp; Custom 6-Slot)
+            Tambah Frame Baru (Impor Canva &amp; Custom Jumlah Foto)
           </h3>
           <p className="text-xs text-[#61433B] mt-0.5">
-            Ekspor desain frame dari Canva (Gratis maupun Pro) lalu unggah di sini — tidak perlu login API Canva.
+            Pilih jumlah slot foto (misalnya 3 foto atau 6 foto), lalu ekspor desain Canva atau buat frame vektor.
           </p>
         </div>
 
@@ -357,6 +414,122 @@ export function CanvaFramePanel({
         </div>
       </div>
 
+      {/* Slot Count & Layout Selector */}
+      <div className="p-3.5 rounded-2xl bg-[#FDF7EE] border-2 border-[#3A231E] space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-xs font-display font-bold text-[#3A231E]">
+              1. Jumlah Foto di Frame ({slotCount} Slot)
+            </div>
+            <p className="text-[11px] text-[#61433B]">
+              Bisa custom sesuai kebutuhan — misalnya 2, 3, 4, atau 6 foto.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {SUPPORTED_SLOT_COUNTS.map((cnt) => (
+              <button
+                key={cnt}
+                type="button"
+                onClick={() => handleSelectSlotCount(cnt)}
+                className={`px-3 py-1.5 rounded-xl border-2 text-xs font-display font-bold cursor-pointer transition-colors ${
+                  slotCount === cnt
+                    ? 'bg-[#6D1D3A] text-[#FDF7EE] border-[#3A231E]'
+                    : 'bg-[#EFE2CE]/70 text-[#3A231E] border-[#3A231E]/40 hover:bg-[#EFE2CE]'
+                }`}
+              >
+                {cnt} Foto
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-[#3A231E]/15">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-display font-semibold text-[#61433B] mr-1">
+              Susunan:
+            </span>
+            {availablePresets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => handleSelectPreset(preset.id)}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-display font-semibold cursor-pointer ${
+                  layoutId === preset.id
+                    ? 'bg-[#3A231E] text-[#FDF7EE] border-[#3A231E]'
+                    : 'bg-white text-[#3A231E] border-[#3A231E]/40 hover:bg-[#EFE2CE]'
+                }`}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setShowManualSlots((prev) => !prev)}
+            className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
+          >
+            <SlidersHorizontal className="w-3 h-3" aria-hidden="true" />
+            <span>{showManualSlots ? 'Tutup Posisi Manual' : 'Atur Posisi Kotak Manual'}</span>
+          </button>
+        </div>
+
+        {showManualSlots && (
+          <div className="p-3 rounded-xl bg-[#EFE2CE]/60 border border-[#3A231E]/35 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-display font-semibold text-[#3A231E]">
+                Atur koordinat kotak foto (% kanvas 1205×1795) agar pas dengan desain Canva:
+              </span>
+              {layoutId === 'custom' && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectSlotCount(slotCount)}
+                  className="text-[11px] font-display font-bold text-[#6D1D3A] underline cursor-pointer"
+                >
+                  Reset ke Preset {slotCount} Foto
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {customSlots.map((s, idx) => (
+                <div
+                  key={s.slotIndex}
+                  className="p-2 rounded-xl bg-white border border-[#3A231E]/30 text-[11px] space-y-1.5"
+                >
+                  <div className="font-display font-bold text-[#6D1D3A]">
+                    Slot #{idx + 1}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {(
+                      [
+                        ['X%', 'x'],
+                        ['Y%', 'y'],
+                        ['L%', 'width'],
+                        ['T%', 'height'],
+                      ] as const
+                    ).map(([lbl, field]) => (
+                      <label key={field} className="block text-[10px] text-[#61433B]">
+                        {lbl}
+                        <input
+                          type="number"
+                          min={1}
+                          max={98}
+                          value={Math.round(s[field] * 100)}
+                          onChange={(e) =>
+                            handleUpdateSlotBox(idx, field, Number(e.target.value) / 100)
+                          }
+                          className="w-full mt-0.5 px-1.5 py-1 border border-[#3A231E]/40 rounded text-xs font-mono-tabular bg-[#FDF7EE]"
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Canva Preparation Banner + 4-Step Guide */}
       {builderMode === 'image' && (
         <div className="p-3.5 rounded-2xl bg-[#EFE2CE]/75 border-2 border-[#3A231E] space-y-2.5">
@@ -366,7 +539,7 @@ export function CanvaFramePanel({
               <span className="font-mono-tabular font-bold text-[#6D1D3A]">
                 1205 × 1795 px
               </span>{' '}
-              (4R Portrait 300 DPI). Pakai template agar 6 posisi foto langsung presisi!
+              (4R Portrait 300 DPI) · Template saat ini berisi <b>{slotCount} area foto</b>.
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -375,7 +548,7 @@ export function CanvaFramePanel({
                 className="whoops-btn whoops-btn-secondary whoops-btn-compact px-3 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>Unduh Template Canva (1205×1795)</span>
+                <span>Unduh Template {slotCount} Foto (1205×1795)</span>
               </button>
               <button
                 type="button"
@@ -395,18 +568,18 @@ export function CanvaFramePanel({
               </div>
               <ol className="list-decimal pl-4 space-y-1">
                 <li>
-                  Klik <b>Unduh Template Canva (1205×1795)</b> di atas.
+                  Pilih jumlah foto di bagian atas (misal <b>3 Foto</b>), lalu klik <b>Unduh Template {slotCount} Foto (1205×1795)</b>.
                 </li>
                 <li>
-                  Di Canva, buat desain baru <b>Custom size: 1205 × 1795 px</b>, lalu upload file template tersebut sebagai panduan posisi 6 foto.
+                  Di Canva, buat desain baru <b>Custom size: 1205 × 1795 px</b>, lalu upload file template tersebut sebagai panduan posisi {slotCount} foto.
                 </li>
                 <li>
                   Tambahkan background, stiker, ilustrasi, dan tulisan sesuka hati di sekeliling kotak foto.
                 </li>
                 <li>
-                  <b>Canva Gratis:</b> Biarkan 6 area foto tertutup warna polos (misal kotak putih template) -&gt; klik <b>Share -&gt; Download -&gt; PNG/JPG</b> -&gt; saat upload di bawah, pilih mode <b>Auto-Lubangi 6 Slot</b>.
+                  <b>Canva Gratis:</b> Biarkan {slotCount} area foto tertutup warna polos (misal kotak putih template) -&gt; klik <b>Share -&gt; Download -&gt; PNG/JPG</b> -&gt; saat upload di bawah, pilih mode <b>Auto-Lubangi {slotCount} Slot</b>.
                   <br />
-                  <b>Canva Pro:</b> Hapus kotak putih di 6 area foto -&gt; Download <b>PNG (Transparent background)</b> -&gt; pilih mode <b>PNG Transparan Asli</b>.
+                  <b>Canva Pro:</b> Hapus kotak putih di {slotCount} area foto -&gt; Download <b>PNG (Transparent background)</b> -&gt; pilih mode <b>PNG Transparan Asli</b>.
                 </li>
               </ol>
             </div>
@@ -522,7 +695,7 @@ export function CanvaFramePanel({
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     {(
                       [
-                        ['auto_cut_slots', 'Auto-Lubangi 6 Slot', 'Untuk PNG/JPG Canva Gratis'],
+                        ['auto_cut_slots', `Auto-Lubangi ${slotCount} Slot`, 'Untuk PNG/JPG Canva Gratis'],
                         ['transparent_png', 'PNG Transparan Asli', 'Untuk PNG Canva Pro / SVG'],
                         ['chroma_key', 'Hapus Warna Kotak', 'Hapus putih/hijau (Chroma)'],
                       ] as const
@@ -601,7 +774,7 @@ export function CanvaFramePanel({
                           onChange={(e) => setChromaOnlyNearSlots(e.target.checked)}
                           className="accent-[#6D1D3A]"
                         />
-                        <span>Fokus area 6 slot saja</span>
+                        <span>Fokus area {slotCount} slot saja</span>
                       </label>
                     </div>
                     <p className="text-[11px] text-[#61433B]">
@@ -703,10 +876,10 @@ export function CanvaFramePanel({
           </button>
         </div>
 
-        {/* Right: Live 6-Slot Frame Preview */}
+        {/* Right: Live Custom-Slot Frame Preview */}
         <div className="lg:col-span-5 flex flex-col items-center bg-[#EFE2CE]/55 border-2 border-[#3A231E] rounded-2xl p-4">
           <div className="text-xs font-display font-bold text-[#3A231E] mb-2">
-            Preview Hasil Foto di Frame ({builderMode === 'image' ? 'Canva Overlay' : 'Vektor'})
+            Preview Hasil ({slotCount} Foto · {builderMode === 'image' ? 'Canva Overlay' : 'Vektor'})
           </div>
 
           <div
@@ -747,11 +920,11 @@ export function CanvaFramePanel({
               </span>
             ) : builderMode === 'image' ? (
               <span className="text-[11px] text-[#61433B]">
-                Unggah gambar Canva untuk melihat 6 foto masuk ke dalam lubang frame.
+                Unggah gambar Canva untuk melihat {slotCount} foto masuk ke dalam lubang frame.
               </span>
             ) : (
               <span className="text-[11px] text-[#61433B]">
-                Preview langsung frame vektor 6-slot.
+                Preview langsung frame vektor {slotCount} slot.
               </span>
             )}
           </div>

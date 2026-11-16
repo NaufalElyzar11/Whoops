@@ -1,13 +1,15 @@
 import {
+  CANVAS_4R_HEIGHT,
+  CANVAS_4R_WIDTH,
   DEFAULT_SLOTS,
   type CapturedPhoto,
   type FilterType,
   type PhotoFrame,
   type SlotAssignment,
 } from '../types';
+import { getFrameSlots } from './frameLayouts';
 
-export const CANVAS_4R_WIDTH = 1205;
-export const CANVAS_4R_HEIGHT = 1795;
+export { CANVAS_4R_HEIGHT, CANVAS_4R_WIDTH };
 
 // Match camera viewfinder & captures to each 4R frame slot so framing matches print 1:1
 export const SLOT_ASPECT_RATIO =
@@ -124,28 +126,36 @@ function applyPixelFilterFallback(
 
 export function buildFrameOverlaySvg(frame: PhotoFrame): string {
   const maskId = `cutout-${frame.id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const slots = getFrameSlots(frame);
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1205 1795">
     <defs>
       <mask id="${maskId}">
         <rect width="1205" height="1795" fill="white" />
-        ${DEFAULT_SLOTS.map(
-          (s) =>
-            `<rect x="${s.x * 1205}" y="${s.y * 1795}" width="${s.width * 1205}" height="${s.height * 1795}" rx="20" fill="black" />`
-        ).join('')}
+        ${slots
+          .map(
+            (s) =>
+              `<rect x="${s.x * 1205}" y="${s.y * 1795}" width="${s.width * 1205}" height="${s.height * 1795}" rx="20" fill="black" />`
+          )
+          .join('')}
       </mask>
     </defs>
     <rect width="1205" height="1795" fill="${frame.bg}" mask="url(#${maskId})" />
     <rect x="16" y="16" width="1173" height="1763" rx="28" fill="none" stroke="${frame.trim}" stroke-width="6" />
-    ${DEFAULT_SLOTS.map(
-      (s) =>
-        `<rect x="${s.x * 1205}" y="${s.y * 1795}" width="${s.width * 1205}" height="${s.height * 1795}" rx="20" fill="none" stroke="${frame.trim}" stroke-width="5" />`
-    ).join('')}
+    ${slots
+      .map(
+        (s) =>
+          `<rect x="${s.x * 1205}" y="${s.y * 1795}" width="${s.width * 1205}" height="${s.height * 1795}" rx="20" fill="none" stroke="${frame.trim}" stroke-width="5" />`
+      )
+      .join('')}
     <text x="602.5" y="1685" text-anchor="middle" font-family="Fredoka, ui-rounded, sans-serif" font-weight="700" font-size="64" fill="${frame.labelColor}">whoops!</text>
     <text x="602.5" y="1735" text-anchor="middle" font-family="Gaegu, cursive" font-size="34" fill="${frame.labelColor}">oops, we made a memory.</text>
   </svg>`;
 }
 
-export function createDemoPosePhoto(poseNum: number): string {
+export function createDemoPosePhoto(
+  poseNum: number,
+  targetRatio = SLOT_ASPECT_RATIO
+): string {
   const palettes = [
     ['#F3D2DB', '#6D1D3A', 'Pose Ceria!'],
     ['#EFE2CE', '#3A231E', 'Finger Heart'],
@@ -155,13 +165,16 @@ export function createDemoPosePhoto(poseNum: number): string {
     ['#DFCBB0', '#6D1D3A', 'Seoul Mood'],
   ];
   const [bg, fg, label] = palettes[(poseNum - 1) % palettes.length];
+  const safeRatio = Math.max(0.5, Math.min(2.6, targetRatio));
   const c = document.createElement('canvas');
   c.width = 1000;
-  c.height = Math.round(1000 / SLOT_ASPECT_RATIO);
+  c.height = Math.round(1000 / safeRatio);
   const ctx = c.getContext('2d');
   if (!ctx) return '';
 
   const cx = c.width / 2;
+  const minDim = Math.min(c.width, c.height);
+  const faceR = Math.round(minDim * 0.16);
   const faceY = Math.round(c.height * 0.41);
 
   ctx.fillStyle = bg;
@@ -178,26 +191,30 @@ export function createDemoPosePhoto(poseNum: number): string {
 
   ctx.fillStyle = fg;
   ctx.beginPath();
-  ctx.arc(cx, faceY, 145, 0, Math.PI * 2);
+  ctx.arc(cx, faceY, faceR, 0, Math.PI * 2);
   ctx.fill();
 
+  const eyeOffX = faceR * 0.37;
+  const eyeOffY = faceR * 0.17;
+  const eyeR = Math.max(5, faceR * 0.11);
   ctx.fillStyle = bg;
   ctx.beginPath();
-  ctx.arc(cx - 54, faceY - 25, 16, 0, Math.PI * 2);
-  ctx.arc(cx + 54, faceY - 25, 16, 0, Math.PI * 2);
+  ctx.arc(cx - eyeOffX, faceY - eyeOffY, eyeR, 0, Math.PI * 2);
+  ctx.arc(cx + eyeOffX, faceY - eyeOffY, eyeR, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.strokeStyle = bg;
-  ctx.lineWidth = 12;
+  ctx.lineWidth = Math.max(4, Math.round(faceR * 0.08));
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.arc(cx, faceY + 16, 54, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.arc(cx, faceY + faceR * 0.11, faceR * 0.37, 0.15 * Math.PI, 0.85 * Math.PI);
   ctx.stroke();
 
   ctx.fillStyle = fg;
-  ctx.font = 'bold 48px Fredoka, ui-rounded, sans-serif';
+  const fontPx = Math.max(28, Math.min(48, Math.round(minDim * 0.065)));
+  ctx.font = `bold ${fontPx}px Fredoka, ui-rounded, sans-serif`;
   ctx.textAlign = 'center';
-  ctx.fillText(`#${poseNum} ${label}`, cx, Math.round(c.height * 0.78));
+  ctx.fillText(`#${poseNum} ${label}`, cx, Math.round(c.height * 0.82));
 
   return c.toDataURL('image/jpeg', 0.92);
 }
@@ -298,7 +315,8 @@ export async function buildComposite4R(
 
   const canUseCssFilter = supportsCanvasFilter();
 
-  for (const s of DEFAULT_SLOTS) {
+  const slots = getFrameSlots(frame);
+  for (const s of slots) {
     const assign = assignments.find((a) => a.slotIndex === s.slotIndex);
     const photo = assign?.photoId ? photos.find((p) => p.id === assign.photoId) : null;
     if (!photo || !assign) continue;

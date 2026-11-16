@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Camera, Clock, RefreshCw, Sparkles } from 'lucide-react';
 import type { PhotoFrame } from '../../types';
+import { getFrameSlotCount } from '../../utils/frameLayouts';
 import { FramePreviewCanvas } from '../FramePreviewCanvas';
 import { WhoopsLogo } from '../WhoopsLogo';
 
@@ -11,9 +12,9 @@ interface WelcomeStepProps {
 }
 
 const STUDIO_STEPS = [
-  { num: '01', title: 'Pilih Frame', desc: 'Tentukan layout 6-slot favoritmu.' },
+  { num: '01', title: 'Pilih Frame', desc: 'Tentukan layout & jumlah foto favoritmu.' },
   { num: '02', title: 'Pose & Retake', desc: 'Timer 3 detik, mirror & retake bebas.' },
-  { num: '03', title: 'Edit 6 Slot', desc: 'Pilih foto, filter retro & atur brightness.' },
+  { num: '03', title: 'Edit & Filter', desc: 'Pilih foto, filter retro & atur brightness.' },
   { num: '04', title: 'Bayar di Kasir', desc: 'Pilih paket lalu langsung ke meja kasir.' },
 ];
 
@@ -112,7 +113,7 @@ export function WelcomeStep({ activeFrames, onStartSession }: WelcomeStepProps) 
                 <div className="mt-3 flex items-center justify-between gap-2">
                   <div className="text-left min-w-0">
                     <div className="text-[10px] font-display font-semibold text-[#6D1D3A] uppercase">
-                      {currentFrame.category}
+                      {currentFrame.category} · {getFrameSlotCount(currentFrame)} Foto
                     </div>
                     <div className="font-display font-bold text-xs text-[#3A231E] truncate">
                       {currentFrame.name}
