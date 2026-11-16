@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   HelpCircle,
+  Layers,
   Loader2,
   Minus,
   Palette,
@@ -18,7 +19,7 @@ import {
   Upload,
   Wand2,
 } from 'lucide-react';
-import type { FrameLayoutId, PhotoFrame, SlotRect } from '../../types';
+import type { FrameLayerOrder, FrameLayoutId, PhotoFrame, SlotRect } from '../../types';
 import {
   generateCanvaTemplateGuidePng,
   inspectCanvaSourceForSlots,
@@ -103,6 +104,7 @@ export function CanvaFramePanel({
   // Canva importer fields
   const [rawSourceUrl, setRawSourceUrl] = useState<string>('');
   const [sourceFilename, setSourceFilename] = useState<string>('');
+  const [layerOrder, setLayerOrder] = useState<FrameLayerOrder>('frame-on-top');
   const [cutoutMode, setCutoutMode] = useState<CanvaCutoutMode>('auto_cut_slots');
   const [fitMode, setFitMode] = useState<CanvaFitMode>('fill');
   const [chromaHex, setChromaHex] = useState<string>('#FFFFFF');
@@ -135,10 +137,12 @@ export function CanvaFramePanel({
     setProcessError(null);
 
     const timer = window.setTimeout(() => {
+      const effectiveCutoutMode: CanvaCutoutMode =
+        layerOrder === 'photos-on-top' ? 'transparent_png' : cutoutMode;
       processCanvaFrameSource(
         rawSourceUrl,
         {
-          cutoutMode,
+          cutoutMode: effectiveCutoutMode,
           fitMode,
           chromaHex,
           chromaTolerance,
@@ -168,6 +172,7 @@ export function CanvaFramePanel({
     };
   }, [
     rawSourceUrl,
+    layerOrder,
     cutoutMode,
     fitMode,
     chromaHex,
@@ -447,6 +452,7 @@ export function CanvaFramePanel({
         labelColor: '#3A231E',
         overlayImageData: processed.overlayDataUrl,
         layoutId,
+        layerOrder,
         slots: cloneSlots(customSlots),
         active: true,
         sortOrder: framesCount + 1,
@@ -667,59 +673,117 @@ export function CanvaFramePanel({
                   </label>
                 </div>
 
-                {/* Only show cutout & fit options once an image is actually uploaded */}
+                {/* Layer order & cutout options shown cleanly after upload */}
                 {rawSourceUrl && (
-                  <div className="p-3 rounded-xl bg-[#EFE2CE]/55 border border-[#3A231E]/35 space-y-2.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-display font-bold text-[#3A231E] inline-flex items-center gap-1.5">
-                        <Scissors className="w-3.5 h-3.5 text-[#6D1D3A]" aria-hidden="true" />
-                        <span>Cara Melubangi Foto</span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowAdvancedFit((prev) => !prev)}
-                        className="text-[11px] font-display font-semibold text-[#6D1D3A] underline cursor-pointer"
-                      >
-                        {showAdvancedFit ? 'Tutup Skala' : 'Skala Kanvas'}
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {(
-                        [
-                          ['auto_cut_slots', 'Lubangi Otomatis', 'Canva Gratis'],
-                          ['transparent_png', 'Sudah Transparan', 'Canva Pro PNG'],
-                          ['chroma_key', 'Hapus Warna', 'Pilih warna kotak'],
-                        ] as const
-                      ).map(([val, title, sub]) => (
+                  <div className="p-3 rounded-xl bg-[#EFE2CE]/55 border border-[#3A231E]/35 space-y-3">
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span className="text-xs font-display font-bold text-[#3A231E] inline-flex items-center gap-1.5">
+                          <Layers className="w-3.5 h-3.5 text-[#6D1D3A]" aria-hidden="true" />
+                          <span>Posisi Layer Foto &amp; Frame</span>
+                        </span>
                         <button
-                          key={val}
                           type="button"
-                          onClick={() => {
-                            setCutoutMode(val);
-                            if (val !== 'chroma_key') setEyedropperActive(false);
-                          }}
+                          onClick={() => setShowAdvancedFit((prev) => !prev)}
+                          className="text-[11px] font-display font-semibold text-[#6D1D3A] underline cursor-pointer"
+                        >
+                          {showAdvancedFit ? 'Tutup Skala' : 'Skala Kanvas'}
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setLayerOrder('frame-on-top')}
                           className={`p-2 rounded-xl border text-left cursor-pointer transition-colors ${
-                            cutoutMode === val
+                            layerOrder === 'frame-on-top'
                               ? 'bg-[#6D1D3A] text-[#FDF7EE] border-[#3A231E]'
                               : 'bg-white text-[#3A231E] border-[#3A231E]/35 hover:bg-[#EFE2CE]'
                           }`}
                         >
                           <div className="font-display font-bold text-[11px] leading-tight">
-                            {title}
+                            Frame di Depan (Overlay)
                           </div>
                           <div
-                            className={`text-[10px] mt-0.5 ${
-                              cutoutMode === val ? 'text-[#FDF7EE]/85' : 'text-[#61433B]'
+                            className={`text-[10px] mt-0.5 leading-snug ${
+                              layerOrder === 'frame-on-top' ? 'text-[#FDF7EE]/85' : 'text-[#61433B]'
                             }`}
                           >
-                            {sub}
+                            Stiker/medali menutup tepi foto
                           </div>
                         </button>
-                      ))}
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLayerOrder('photos-on-top');
+                            setEyedropperActive(false);
+                          }}
+                          className={`p-2 rounded-xl border text-left cursor-pointer transition-colors ${
+                            layerOrder === 'photos-on-top'
+                              ? 'bg-[#6D1D3A] text-[#FDF7EE] border-[#3A231E]'
+                              : 'bg-white text-[#3A231E] border-[#3A231E]/35 hover:bg-[#EFE2CE]'
+                          }`}
+                        >
+                          <div className="font-display font-bold text-[11px] leading-tight">
+                            Foto di Depan (Frame Belakang)
+                          </div>
+                          <div
+                            className={`text-[10px] mt-0.5 leading-snug ${
+                              layerOrder === 'photos-on-top' ? 'text-[#FDF7EE]/85' : 'text-[#61433B]'
+                            }`}
+                          >
+                            Bebas ubah ukuran tanpa celah putih
+                          </div>
+                        </button>
+                      </div>
                     </div>
 
-                    {cutoutMode === 'chroma_key' && (
+                    {layerOrder === 'frame-on-top' && (
+                      <div className="pt-2 border-t border-[#3A231E]/15 space-y-2">
+                        <span className="text-xs font-display font-bold text-[#3A231E] inline-flex items-center gap-1.5">
+                          <Scissors className="w-3.5 h-3.5 text-[#6D1D3A]" aria-hidden="true" />
+                          <span>Cara Melubangi Foto</span>
+                        </span>
+
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {(
+                            [
+                              ['auto_cut_slots', 'Lubangi Otomatis', 'Canva Gratis'],
+                              ['transparent_png', 'Sudah Transparan', 'Canva Pro PNG'],
+                              ['chroma_key', 'Hapus Warna', 'Pilih warna kotak'],
+                            ] as const
+                          ).map(([val, title, sub]) => (
+                            <button
+                              key={val}
+                              type="button"
+                              onClick={() => {
+                                setCutoutMode(val);
+                                if (val !== 'chroma_key') setEyedropperActive(false);
+                              }}
+                              className={`p-2 rounded-xl border text-left cursor-pointer transition-colors ${
+                                cutoutMode === val
+                                  ? 'bg-[#6D1D3A] text-[#FDF7EE] border-[#3A231E]'
+                                  : 'bg-white text-[#3A231E] border-[#3A231E]/35 hover:bg-[#EFE2CE]'
+                              }`}
+                            >
+                              <div className="font-display font-bold text-[11px] leading-tight">
+                                {title}
+                              </div>
+                              <div
+                                className={`text-[10px] mt-0.5 ${
+                                  cutoutMode === val ? 'text-[#FDF7EE]/85' : 'text-[#61433B]'
+                                }`}
+                              >
+                                {sub}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {layerOrder === 'frame-on-top' && cutoutMode === 'chroma_key' && (
                       <div className="p-2.5 rounded-xl bg-white border border-[#3A231E]/30 space-y-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <label className="text-[11px] font-display font-semibold inline-flex items-center gap-1.5">
@@ -1018,6 +1082,7 @@ export function CanvaFramePanel({
               }
             }}
             builderMode={builderMode}
+            layerOrder={layerOrder}
             vectorStyle={{ bg: vectorBg, trim: vectorTrim, labelColor: vectorLabelColor }}
             rawSourceUrl={rawSourceUrl}
             processedOverlayUrl={processed?.overlayDataUrl || ''}

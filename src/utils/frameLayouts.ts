@@ -2,6 +2,7 @@ import {
   CANVAS_4R_HEIGHT,
   CANVAS_4R_WIDTH,
   DEFAULT_SLOTS,
+  type FrameLayerOrder,
   type FrameLayoutId,
   type PhotoFrame,
   type SlotRect,
@@ -191,17 +192,28 @@ function decodeUint62(str: string): number {
 }
 
 /**
- * Packs custom 1..8 SlotRect coordinates into a <= 56 char ASCII string for Firestore's
- * strict 3x20-char (`bg`, `trim`, `labelColor`) allowlist when `type === 'image'`.
+ * Packs custom 1..8 SlotRect coordinates + layerOrder into <= 51 ASCII chars
+ * within Firestore's strict 3x20-char (`bg`, `trim`, `labelColor`) allowlist.
  */
-function packCustomSlotsForImageMeta(slots: SlotRect[]): [string, string, string] {
+function packCustomSlotsForImageMeta(
+  slots: SlotRect[],
+  layerOrder: FrameLayerOrder
+): [string, string, string] {
   const safeSlots = normalizeSlots(slots);
   const count = safeSlots.length;
   const highPrecision = count <= 6;
   const maxUnit = highPrecision ? 3843 : 61;
   const charsPerCoord = highPrecision ? 2 : 1;
+  const modeChar =
+    layerOrder === 'photos-on-top'
+      ? highPrecision
+        ? 'P'
+        : 'p'
+      : highPrecision
+        ? 'C'
+        : 'c';
 
-  let body = `${highPrecision ? 'C' : 'c'}${count}`;
+  let body = `${modeChar}${count}`;
   for (const s of safeSlots) {
     body +=
       encodeUint62(s.x * maxUnit, charsPerCoord) +
@@ -221,14 +233,17 @@ function unpackCustomSlotsFromImageMeta(
   bg: string,
   trim: string,
   labelColor: string
-): SlotRect[] | null {
+): { slots: SlotRect[]; layerOrder: FrameLayerOrder } | null {
   const combined =
     bg +
     (trim.startsWith('#') ? '' : trim) +
     (labelColor.startsWith('#') ? '' : labelColor);
-  if (!combined || (combined[0] !== 'C' && combined[0] !== 'c')) return null;
+  const tag = combined?.[0];
+  if (tag !== 'C' && tag !== 'c' && tag !== 'P' && tag !== 'p') return null;
 
-  const highPrecision = combined[0] === 'C';
+  const highPrecision = tag === 'C' || tag === 'P';
+  const layerOrder: FrameLayerOrder =
+    tag === 'P' || tag === 'p' ? 'photos-on-top' : 'frame-on-top';
   const count = Number.parseInt(combined[1] || '0', 10);
   if (!Number.isFinite(count) || count < 1 || count > 8) return null;
 
@@ -252,15 +267,17 @@ function unpackCustomSlotsFromImageMeta(
         maxUnit,
     });
   }
-  return normalizeSlots(result);
+  return { slots: normalizeSlots(result), layerOrder };
 }
 
 function isPresetId(val: string): val is Exclude<FrameLayoutId, 'custom'> {
   return Object.prototype.hasOwnProperty.call(FRAME_LAYOUT_PRESETS, val);
 }
 
+const PHOTOS_TOP_TRIM_MARKER = 'LAYER:PHOTOS_TOP';
+
 /**
- * Encodes `layoutId` and optional `slots` strictly within Firestore `isValidFrame` field limits.
+ * Encodes `layoutId`, `layerOrder`, and optional `slots` strictly within Firestore `isValidFrame` field limits.
  */
 export function encodeFrameForFirestore(frame: PhotoFrame): {
   bg: string;
@@ -268,16 +285,20 @@ export function encodeFrameForFirestore(frame: PhotoFrame): {
   labelColor: string;
   overlayImageData: string;
 } {
+  const layerOrder: FrameLayerOrder =
+    frame.layerOrder === 'photos-on-top' ? 'photos-on-top' : 'frame-on-top';
+
   if (frame.type === 'vector') {
     let encodedOverlay = '';
     const hasCustomSlots = Boolean(frame.slots && frame.slots.length > 0);
     const hasCustomPreset = frame.layoutId && frame.layoutId !== '6-grid';
-    if (hasCustomSlots || hasCustomPreset) {
+    if (hasCustomSlots || hasCustomPreset || layerOrder !== 'frame-on-top') {
       encodedOverlay =
         VECTOR_LAYOUT_PREFIX +
         JSON.stringify({
           layoutId: frame.layoutId || 'custom',
           slots: hasCustomSlots ? normalizeSlots(frame.slots!) : undefined,
+          layerOrder,
         });
     }
     return {
@@ -288,18 +309,18 @@ export function encodeFrameForFirestore(frame: PhotoFrame): {
     };
   }
 
-  // `frame.type === 'image'` (Canva overlay Data URL occupies `overlayImageData`)
+  // `frame.type === 'image'`
   if (frame.layoutId && frame.layoutId !== 'custom' && isPresetId(frame.layoutId)) {
     return {
       bg: `L:${frame.layoutId}`.slice(0, 20),
-      trim: '#3A231E',
+      trim: layerOrder === 'photos-on-top' ? PHOTOS_TOP_TRIM_MARKER : '#3A231E',
       labelColor: '#3A231E',
       overlayImageData: (frame.overlayImageData || '').slice(0, 750000),
     };
   }
 
   if (frame.slots && frame.slots.length > 0) {
-    const [mBg, mTrim, mLabel] = packCustomSlotsForImageMeta(frame.slots);
+    const [mBg, mTrim, mLabel] = packCustomSlotsForImageMeta(frame.slots, layerOrder);
     return {
       bg: mBg,
       trim: mTrim,
@@ -310,7 +331,7 @@ export function encodeFrameForFirestore(frame: PhotoFrame): {
 
   return {
     bg: 'L:6-grid',
-    trim: '#3A231E',
+    trim: layerOrder === 'photos-on-top' ? PHOTOS_TOP_TRIM_MARKER : '#3A231E',
     labelColor: '#3A231E',
     overlayImageData: (frame.overlayImageData || '').slice(0, 750000),
   };
@@ -322,6 +343,7 @@ export function decodeFrameFromFirestore(raw: PhotoFrame): PhotoFrame {
       ...raw,
       slots: normalizeSlots(raw.slots),
       layoutId: raw.layoutId || 'custom',
+      layerOrder: raw.layerOrder === 'photos-on-top' ? 'photos-on-top' : 'frame-on-top',
     };
   }
 
@@ -330,6 +352,7 @@ export function decodeFrameFromFirestore(raw: PhotoFrame): PhotoFrame {
       const parsed = JSON.parse(raw.overlayImageData.slice(VECTOR_LAYOUT_PREFIX.length)) as {
         layoutId?: FrameLayoutId;
         slots?: SlotRect[];
+        layerOrder?: FrameLayerOrder;
       };
       const layoutId =
         parsed.layoutId && (parsed.layoutId === 'custom' || isPresetId(parsed.layoutId))
@@ -346,13 +369,22 @@ export function decodeFrameFromFirestore(raw: PhotoFrame): PhotoFrame {
         overlayImageData: '',
         layoutId,
         slots,
+        layerOrder: parsed.layerOrder === 'photos-on-top' ? 'photos-on-top' : 'frame-on-top',
       };
     } catch {
-      return { ...raw, layoutId: '6-grid', slots: cloneSlots(DEFAULT_SLOTS) };
+      return {
+        ...raw,
+        layoutId: '6-grid',
+        slots: cloneSlots(DEFAULT_SLOTS),
+        layerOrder: 'frame-on-top',
+      };
     }
   }
 
   if (raw.type === 'image') {
+    const presetLayerOrder: FrameLayerOrder =
+      raw.trim === PHOTOS_TOP_TRIM_MARKER ? 'photos-on-top' : 'frame-on-top';
+
     if (raw.bg?.startsWith('L:')) {
       const candidate = raw.bg.slice(2);
       if (isPresetId(candidate)) {
@@ -360,6 +392,7 @@ export function decodeFrameFromFirestore(raw: PhotoFrame): PhotoFrame {
           ...raw,
           layoutId: candidate,
           slots: cloneSlots(FRAME_LAYOUT_PRESETS[candidate].slots),
+          layerOrder: presetLayerOrder,
         };
       }
     }
@@ -372,7 +405,8 @@ export function decodeFrameFromFirestore(raw: PhotoFrame): PhotoFrame {
       return {
         ...raw,
         layoutId: 'custom',
-        slots: unpacked,
+        slots: unpacked.slots,
+        layerOrder: unpacked.layerOrder,
       };
     }
   }
@@ -382,6 +416,7 @@ export function decodeFrameFromFirestore(raw: PhotoFrame): PhotoFrame {
       ...raw,
       layoutId: raw.layoutId,
       slots: cloneSlots(FRAME_LAYOUT_PRESETS[raw.layoutId].slots),
+      layerOrder: raw.layerOrder === 'photos-on-top' ? 'photos-on-top' : 'frame-on-top',
     };
   }
 
@@ -389,7 +424,15 @@ export function decodeFrameFromFirestore(raw: PhotoFrame): PhotoFrame {
     ...raw,
     layoutId: raw.layoutId || '6-grid',
     slots: cloneSlots(DEFAULT_SLOTS),
+    layerOrder: raw.layerOrder === 'photos-on-top' ? 'photos-on-top' : 'frame-on-top',
   };
+}
+
+export function getFrameLayerOrder(frame?: PhotoFrame | null): FrameLayerOrder {
+  if (!frame) return 'frame-on-top';
+  if (frame.layerOrder === 'photos-on-top') return 'photos-on-top';
+  const decoded = decodeFrameFromFirestore(frame);
+  return decoded.layerOrder === 'photos-on-top' ? 'photos-on-top' : 'frame-on-top';
 }
 
 export function getFrameSlots(frame?: PhotoFrame | null): SlotRect[] {

@@ -74,7 +74,7 @@ import {
   normalizeVoucherCode,
   voucherToPackage,
 } from '../utils/voucher';
-import { getFrameSlotCount } from '../utils/frameLayouts';
+import { getFrameLayerOrder, getFrameSlotCount } from '../utils/frameLayouts';
 import { DoodleStudioModal } from './DoodleStudioModal';
 import { FramePreviewCanvas } from './FramePreviewCanvas';
 import { OrderQrModal } from './OrderQrModal';
@@ -1725,7 +1725,11 @@ export function AdminDashboard({
                             : 'bg-[#EFE2CE] text-[#3A231E]'
                         }`}
                       >
-                        {f.type === 'image' ? 'Canva / PNG' : 'Vektor'}
+                        {f.type === 'image'
+                          ? getFrameLayerOrder(f) === 'photos-on-top'
+                            ? 'Canva · Foto Depan'
+                            : 'Canva / PNG'
+                          : 'Vektor'}
                       </span>
                     </div>
                     <h4 className="font-display font-bold text-base text-[#3A231E] mt-1">

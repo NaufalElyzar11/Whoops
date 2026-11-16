@@ -391,7 +391,8 @@ export function generateCanvaTemplateGuidePng(slots: SlotRect[] = DEFAULT_SLOTS)
 export function detectBoundingBoxesFromMask(
   mask: Uint8Array,
   width: number,
-  height: number
+  height: number,
+  applyBleed = true
 ): SlotRect[] {
   const visited = new Uint8Array(width * height);
   const queue = new Int32Array(width * height);
@@ -490,13 +491,22 @@ export function detectBoundingBoxesFromMask(
       return a.x - b.x;
     });
 
-  return topBoxes.map((b, slotIndex) => ({
-    slotIndex,
-    x: Number(b.x.toFixed(3)),
-    y: Number(b.y.toFixed(3)),
-    width: Number(b.width.toFixed(3)),
-    height: Number(b.height.toFixed(3)),
-  }));
+  const bleedX = applyBleed ? 0.006 : 0;
+  const bleedY = applyBleed ? 0.005 : 0;
+
+  return topBoxes.map((b, slotIndex) => {
+    const nx = Math.max(0.01, b.x - bleedX);
+    const ny = Math.max(0.01, b.y - bleedY);
+    const nw = Math.min(0.99 - nx, b.width + bleedX * 2);
+    const nh = Math.min(0.99 - ny, b.height + bleedY * 2);
+    return {
+      slotIndex,
+      x: Number(nx.toFixed(3)),
+      y: Number(ny.toFixed(3)),
+      width: Number(nw.toFixed(3)),
+      height: Number(nh.toFixed(3)),
+    };
+  });
 }
 
 export interface CanvaInspectResult {
@@ -542,8 +552,8 @@ export async function inspectCanvaSourceForSlots(
       const alpha = data[p + 3];
       const isInterior = x >= marginX && x < w - marginX && y >= marginY && y < h - marginY;
 
-      if (alpha < 45) {
-        if (isInterior) transparentInteriorCount++;
+      if (alpha < 120) {
+        if (isInterior && alpha < 55) transparentInteriorCount++;
         if (mode === 'transparent') mask[idx] = 1;
       } else if (mode === 'color') {
         const dr = data[p] - target.r;

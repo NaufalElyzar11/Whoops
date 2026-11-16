@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Camera, Move, Scaling } from 'lucide-react';
-import type { PhotoFrame, SlotRect } from '../../types';
+import type { FrameLayerOrder, PhotoFrame, SlotRect } from '../../types';
 import type { CanvaCutoutMode } from '../../utils/canvaFrameImporter';
 
 interface InteractiveSlotCanvasProps {
@@ -9,6 +9,7 @@ interface InteractiveSlotCanvasProps {
   onSelectSlot: (idx: number) => void;
   onSlotsChange: (next: SlotRect[], isFinalCommit: boolean) => void;
   builderMode: 'image' | 'vector';
+  layerOrder: FrameLayerOrder;
   vectorStyle: { bg: string; trim: string; labelColor: string };
   rawSourceUrl: string;
   processedOverlayUrl: string;
@@ -57,6 +58,7 @@ export function InteractiveSlotCanvas({
   onSelectSlot,
   onSlotsChange,
   builderMode,
+  layerOrder,
   vectorStyle,
   rawSourceUrl,
   processedOverlayUrl,
@@ -179,10 +181,12 @@ export function InteractiveSlotCanvas({
     onSlotsChange(slots, true);
   };
 
-  // While actively dragging an auto-cut Canva image, temporarily show the raw graphic underneath so edges align effortlessly
+  const isPhotosOnTop = builderMode === 'image' && layerOrder === 'photos-on-top';
+
+  // While actively dragging an auto-cut Canva image, temporarily show raw graphic underneath so edges align effortlessly
   const displayOverlaySrc =
     builderMode === 'image'
-      ? isDragging && cutoutMode === 'auto_cut_slots' && rawSourceUrl
+      ? isDragging && cutoutMode === 'auto_cut_slots' && !isPhotosOnTop && rawSourceUrl
         ? rawSourceUrl
         : processedOverlayUrl || rawSourceUrl
       : '';
@@ -199,7 +203,7 @@ export function InteractiveSlotCanvas({
         eyedropperActive ? 'cursor-crosshair' : ''
       }`}
     >
-      {/* Layer 1: Sample photos or vector background base */}
+      {/* Layer 1: Sample photos or placeholder base */}
       {slots.map((s, idx) => {
         const sw = SAMPLE_SLOTS[idx % SAMPLE_SLOTS.length];
         return (
@@ -213,7 +217,9 @@ export function InteractiveSlotCanvas({
               backgroundColor: showSamplePhotos ? sw.bg : '#EFE2CE',
               color: sw.fg,
             }}
-            className="absolute flex flex-col items-center justify-center text-center pointer-events-none"
+            className={`absolute flex flex-col items-center justify-center text-center pointer-events-none ${
+              isPhotosOnTop ? 'z-10' : 'z-[1]'
+            }`}
           >
             {showSamplePhotos && (
               <>
@@ -227,13 +233,17 @@ export function InteractiveSlotCanvas({
         );
       })}
 
-      {/* Layer 2: Frame Artwork Overlay (pointer-events-none so slot handles underneath stay interactive!) */}
+      {/* Layer 2: Frame Artwork Overlay (behind photos when photos-on-top, in front when frame-on-top) */}
       {builderMode === 'image' && displayOverlaySrc ? (
         <img
           src={displayOverlaySrc}
           alt="Preview desain frame Canva"
-          className={`absolute inset-0 w-full h-full object-fill pointer-events-none z-10 transition-opacity duration-150 ${
-            isDragging && cutoutMode === 'auto_cut_slots' ? 'opacity-65' : 'opacity-100'
+          className={`absolute inset-0 w-full h-full object-fill pointer-events-none transition-opacity duration-150 ${
+            isPhotosOnTop ? 'z-[2]' : 'z-10'
+          } ${
+            isDragging && cutoutMode === 'auto_cut_slots' && !isPhotosOnTop
+              ? 'opacity-65'
+              : 'opacity-100'
           }`}
         />
       ) : builderMode === 'vector' ? (

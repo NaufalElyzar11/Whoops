@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { PhotoFrame } from '../types';
-import { getFrameSlots } from '../utils/frameLayouts';
+import { getFrameLayerOrder, getFrameSlots } from '../utils/frameLayouts';
 
 interface FramePreviewCanvasProps {
   frame: PhotoFrame;
@@ -25,6 +25,8 @@ export function FramePreviewCanvas({
 }: FramePreviewCanvasProps) {
   const maskId = `cutout-preview-${frame.id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const slots = getFrameSlots(frame);
+  const layerOrder = getFrameLayerOrder(frame);
+  const isPhotosOnTop = frame.type === 'image' && layerOrder === 'photos-on-top';
 
   const frameCanvas = (
     <div
@@ -73,16 +75,16 @@ export function FramePreviewCanvas({
               height: `${s.height * 100}%`,
             }}
             className={`absolute overflow-hidden flex flex-col items-center justify-center text-center transition-all duration-150 ${
-              interactive ? 'cursor-pointer' : ''
-            } ${
+              isPhotosOnTop ? 'z-10' : ''
+            } ${interactive ? 'cursor-pointer' : ''} ${
               !customContent
                 ? 'bg-[#EFE2CE]/90 border-2 border-dashed border-[#6D1D3A] text-[#6D1D3A] font-display text-xs'
                 : ''
             } ${
               isDragOver
-                ? 'ring-4 ring-[#6D1D3A] bg-[#F3D2DB]/95 scale-[1.02] z-[6]'
+                ? `ring-4 ring-[#6D1D3A] bg-[#F3D2DB]/95 scale-[1.02] ${isPhotosOnTop ? 'z-[16]' : 'z-[6]'}`
                 : isSelected
-                  ? 'shadow-[0_0_0_3.5px_#C97B90_inset] z-[5]'
+                  ? `shadow-[0_0_0_3.5px_#C97B90_inset] ${isPhotosOnTop ? 'z-[15]' : 'z-[5]'}`
                   : ''
             }`}
           >
@@ -96,7 +98,9 @@ export function FramePreviewCanvas({
           src={frame.overlayImageData}
           alt={frame.name}
           referrerPolicy="no-referrer"
-          className="absolute inset-0 w-full h-full object-fill pointer-events-none z-10"
+          className={`absolute inset-0 w-full h-full object-fill pointer-events-none ${
+            isPhotosOnTop ? 'z-[1]' : 'z-10'
+          }`}
         />
       ) : (
         <svg

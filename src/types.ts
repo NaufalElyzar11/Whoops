@@ -97,6 +97,8 @@ export type FrameLayoutId =
   | '8-grid'
   | 'custom';
 
+export type FrameLayerOrder = 'frame-on-top' | 'photos-on-top';
+
 export interface PhotoFrame {
   id: string;
   name: string;
@@ -110,6 +112,7 @@ export interface PhotoFrame {
   sortOrder: number;
   layoutId?: FrameLayoutId;
   slots?: SlotRect[];
+  layerOrder?: FrameLayerOrder;
   updatedAt?: unknown;
 }
 

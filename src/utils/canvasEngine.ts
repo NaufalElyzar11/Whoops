@@ -7,7 +7,7 @@ import {
   type PhotoFrame,
   type SlotAssignment,
 } from '../types';
-import { getFrameSlots } from './frameLayouts';
+import { getFrameLayerOrder, getFrameSlots } from './frameLayouts';
 
 export { CANVAS_4R_HEIGHT, CANVAS_4R_WIDTH };
 
@@ -314,7 +314,32 @@ export async function buildComposite4R(
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   const canUseCssFilter = supportsCanvasFilter();
+  const layerOrder = getFrameLayerOrder(frame);
+  const isPhotosOnTop = frame.type === 'image' && layerOrder === 'photos-on-top';
 
+  const drawFrameArtwork = async () => {
+    if (frame.type === 'image' && frame.overlayImageData) {
+      const frameImg = await loadImage(frame.overlayImageData);
+      ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
+    } else {
+      const svgBlob = new Blob([buildFrameOverlaySvg(frame)], {
+        type: 'image/svg+xml;charset=utf-8',
+      });
+      const svgUrl = URL.createObjectURL(svgBlob);
+      try {
+        const frameImg = await loadImage(svgUrl);
+        ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
+      } finally {
+        URL.revokeObjectURL(svgUrl);
+      }
+    }
+  };
+
+  if (isPhotosOnTop) {
+    await drawFrameArtwork();
+  }
+
+  const cornerRadius = frame.type === 'image' ? 0 : 20;
   const slots = getFrameSlots(frame);
   for (const s of slots) {
     const assign = assignments.find((a) => a.slotIndex === s.slotIndex);
@@ -322,15 +347,21 @@ export async function buildComposite4R(
     if (!photo || !assign) continue;
 
     const img = await loadImage(photo.dataUrl);
-    const dx = s.x * canvas.width;
-    const dy = s.y * canvas.height;
-    const dw = Math.round(s.width * canvas.width);
-    const dh = Math.round(s.height * canvas.height);
+    const dx = Math.floor(s.x * canvas.width);
+    const dy = Math.floor(s.y * canvas.height);
+    const dw = Math.ceil(s.width * canvas.width);
+    const dh = Math.ceil(s.height * canvas.height);
 
     ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(dx, dy, dw, dh, 20);
-    ctx.clip();
+    if (cornerRadius > 0) {
+      ctx.beginPath();
+      ctx.roundRect(dx, dy, dw, dh, cornerRadius);
+      ctx.clip();
+    } else {
+      ctx.beginPath();
+      ctx.rect(dx, dy, dw, dh);
+      ctx.clip();
+    }
 
     if (canUseCssFilter) {
       ctx.filter = getCssFilter(assign.filter, assign.brightness);
@@ -352,20 +383,8 @@ export async function buildComposite4R(
     ctx.restore();
   }
 
-  if (frame.type === 'image' && frame.overlayImageData) {
-    const frameImg = await loadImage(frame.overlayImageData);
-    ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
-  } else {
-    const svgBlob = new Blob([buildFrameOverlaySvg(frame)], {
-      type: 'image/svg+xml;charset=utf-8',
-    });
-    const svgUrl = URL.createObjectURL(svgBlob);
-    try {
-      const frameImg = await loadImage(svgUrl);
-      ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
-    } finally {
-      URL.revokeObjectURL(svgUrl);
-    }
+  if (!isPhotosOnTop) {
+    await drawFrameArtwork();
   }
 
   const fullPngDataUrl = canvas.toDataURL('image/png');
