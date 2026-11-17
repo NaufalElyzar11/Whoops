@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import {
   Check,
   CheckCircle2,
+  CloudUpload,
   Loader2,
   Pause,
   Play,
@@ -13,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { rupiah } from '../../constants/defaults';
+import type { GDriveUploadProgress } from '../../services/googleDriveService';
 import type {
   PhotoboothOrder,
   ServicePackage,
@@ -41,6 +43,8 @@ interface CheckoutStepProps {
   orderError: string | null;
   currentOrderId: string | null;
   liveOrder: PhotoboothOrder | null;
+  bgGdriveStatus: 'idle' | 'uploading' | 'ready' | 'error';
+  bgGdriveProgress: GDriveUploadProgress | null;
   onSubmitOrder: () => void;
   onResetBoothNow: () => void;
 }
@@ -64,6 +68,8 @@ export function CheckoutStep({
   orderError,
   currentOrderId,
   liveOrder,
+  bgGdriveStatus,
+  bgGdriveProgress,
   onSubmitOrder,
   onResetBoothNow,
 }: CheckoutStepProps) {
@@ -527,6 +533,37 @@ export function CheckoutStep({
               </p>
             </div>
           </div>
+
+          {bgGdriveStatus !== 'idle' && (
+            <div
+              className={`mt-3 px-3 py-2 rounded-xl border text-[11px] font-medium flex items-center gap-2 text-left tabular-nums ${
+                bgGdriveStatus === 'ready'
+                  ? 'bg-emerald-50 border-emerald-700/50 text-emerald-900'
+                  : 'bg-[#FDF7EE] border-[#3A231E]/30 text-[#3A231E]'
+              }`}
+            >
+              {bgGdriveStatus === 'uploading' ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#6D1D3A] shrink-0" aria-hidden="true" />
+                  <span>
+                    {bgGdriveProgress && bgGdriveProgress.totalFiles > 0
+                      ? `Menyiapkan folder Google Drive (${Math.min(bgGdriveProgress.uploadedFiles + 1, bgGdriveProgress.totalFiles)}/${bgGdriveProgress.totalFiles} file)...`
+                      : 'Menyiapkan folder Google Drive di background...'}
+                  </span>
+                </>
+              ) : bgGdriveStatus === 'ready' ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" aria-hidden="true" />
+                  <span>Folder Google Drive siap, QR kasir akan langsung muncul.</span>
+                </>
+              ) : (
+                <>
+                  <CloudUpload className="w-3.5 h-3.5 text-[#6D1D3A] shrink-0" aria-hidden="true" />
+                  <span>Foto akan disiapkan dari meja kasir saat verifikasi.</span>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="mt-5">

@@ -177,7 +177,8 @@ export async function uploadOrderToGoogleDrive(
   composite4RPng: string | null,
   rawPhotos: RawPhotoPayload[],
   existingFolderId?: string,
-  onProgress?: (progress: GDriveUploadProgress) => void
+  onProgress?: (progress: GDriveUploadProgress) => void,
+  onFolderReady?: (folder: { folderId: string; folderUrl: string }) => void
 ): Promise<GDriveUploadResult> {
   const files: GDriveUploadFile[] = [];
 
@@ -236,8 +237,12 @@ export async function uploadOrderToGoogleDrive(
       throw new Error('Google Apps Script tidak mengembalikan link folder.');
     }
 
+    const hadFolder = Boolean(targetFolderId);
     targetFolderId = res.folderId;
     targetFolderUrl = res.folderUrl;
+    if (!hadFolder) {
+      onFolderReady?.({ folderId: targetFolderId, folderUrl: targetFolderUrl });
+    }
     lastTotalFiles = res.totalFiles ?? uploadedSoFar + (res.fileCount ?? batch.length);
     if (res.sharingWarning) sharingWarning = res.sharingWarning;
 

@@ -32,6 +32,10 @@ import {
   decodeFrameFromFirestore,
   encodeFrameForFirestore,
 } from '../utils/frameLayouts';
+import {
+  GDRIVE_CONFIG_PKG_ID,
+  gdriveConfigToPackage,
+} from '../utils/gdriveConfigSync';
 import type { OrderGDriveLinkInfo } from './demoStore';
 
 export function subscribeStoreSettings(
@@ -98,7 +102,8 @@ export function subscribeFrames(
 }
 
 export function subscribeOrders(
-  onData: (orders: PhotoboothOrder[]) => void
+  onData: (orders: PhotoboothOrder[]) => void,
+  onError?: (err: unknown) => void
 ): Unsubscribe {
   const path = 'orders';
   const q = query(collection(db, path), orderBy('createdAt', 'desc'));
@@ -109,7 +114,8 @@ export function subscribeOrders(
       onData(items);
     },
     (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
+      if (onError) onError(error);
+      else handleFirestoreError(error, OperationType.LIST, path);
     }
   );
 }
@@ -343,6 +349,7 @@ export async function fetchOrderMediaDataUrl(
 }
 
 const GDRIVE_META_DOC_ID = 'gdrive_meta';
+const GDRIVE_PENDING_DOC_ID = 'gdrive_pending';
 
 function parseGDriveMetaData(raw: unknown): OrderGDriveLinkInfo | null {
   if (typeof raw !== 'string' || !raw) return null;
@@ -359,15 +366,21 @@ function parseGDriveMetaData(raw: unknown): OrderGDriveLinkInfo | null {
   }
 }
 
-// Stored in orders/{orderId}/media/gdrive_meta so existing live Firestore rules persist GDrive links across devices
+// Stored in orders/{orderId}/media/{docId}; Booth writes write-once docs with kind='original' while paymentStatus is PENDING_VERIFICATION
 export async function saveOrderGDriveMeta(
   orderId: string,
-  info: OrderGDriveLinkInfo
+  info: OrderGDriveLinkInfo,
+  options?: {
+    kind?: 'original' | 'final';
+    docId?: typeof GDRIVE_META_DOC_ID | typeof GDRIVE_PENDING_DOC_ID;
+  }
 ): Promise<void> {
-  const path = `orders/${orderId}/media/${GDRIVE_META_DOC_ID}`;
+  const docId = options?.docId || GDRIVE_META_DOC_ID;
+  const kind = options?.kind || 'final';
+  const path = `orders/${orderId}/media/${docId}`;
   try {
-    await setDoc(doc(db, 'orders', orderId, 'media', GDRIVE_META_DOC_ID), {
-      kind: 'final',
+    await setDoc(doc(db, 'orders', orderId, 'media', docId), {
+      kind,
       index: 0,
       totalChunks: 1,
       data: JSON.stringify(info),
@@ -388,6 +401,34 @@ export async function fetchOrderGDriveMeta(
   } catch {
     return null;
   }
+}
+
+export async function fetchOrderGDrivePending(
+  orderId: string
+): Promise<OrderGDriveLinkInfo | null> {
+  try {
+    const snap = await getDoc(doc(db, 'orders', orderId, 'media', GDRIVE_PENDING_DOC_ID));
+    if (!snap.exists()) return null;
+    return parseGDriveMetaData((snap.data() as { data?: unknown }).data);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCloudGDriveConfig(
+  webAppUrl: string,
+  rootFolderId: string
+): Promise<void> {
+  const cleanUrl = webAppUrl.trim();
+  if (!cleanUrl) {
+    try {
+      await deletePackage(GDRIVE_CONFIG_PKG_ID);
+    } catch {
+      // Ignore if absent
+    }
+    return;
+  }
+  await savePackage(gdriveConfigToPackage({ webAppUrl: cleanUrl, rootFolderId }));
 }
 
 export function subscribeOrderGDriveMeta(

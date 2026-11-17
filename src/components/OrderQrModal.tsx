@@ -6,6 +6,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FolderArchive,
   FolderOpen,
   Loader2,
   Sparkles,
@@ -31,6 +32,8 @@ interface OrderQrModalProps {
     filename: string
   ) => void;
   isDownloading: boolean;
+  onDownloadAll?: (order: PhotoboothOrder) => void;
+  isDownloadingAll?: boolean;
 }
 
 export function OrderQrModal({
@@ -44,6 +47,8 @@ export function OrderQrModal({
   onClose,
   onDownloadHighRes,
   isDownloading,
+  onDownloadAll,
+  isDownloadingAll = false,
 }: OrderQrModalProps) {
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -249,12 +254,28 @@ export function OrderQrModal({
                   `WHOOPS-${order.orderCode}-4R-300DPI.png`
                 )
               }
-              disabled={isDownloading}
+              disabled={isDownloading || isDownloadingAll}
               className="whoops-btn whoops-btn-secondary w-full py-2.5 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Download className="w-4 h-4" aria-hidden="true" />
               <span>{isDownloading ? 'Mengunduh...' : 'Unduh PNG 300 DPI (Laptop)'}</span>
             </button>
+
+            {onDownloadAll && (
+              <button
+                type="button"
+                onClick={() => onDownloadAll(order)}
+                disabled={isDownloadingAll || isDownloading}
+                className="whoops-btn whoops-btn-ghost w-full py-2.5 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <FolderArchive className="w-4 h-4" aria-hidden="true" />
+                <span>
+                  {isDownloadingAll
+                    ? 'Menyiapkan ZIP...'
+                    : 'Unduh Semua (4R + Mentah .zip)'}
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </motion.div>

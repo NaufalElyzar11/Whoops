@@ -182,6 +182,9 @@ export interface CreateDemoOrderInput {
   previewThumbUrl: string;
   fullPngDataUrl: string;
   rawPhotos: RawPhotoPayload[];
+  gdriveFolderId?: string;
+  gdriveFolderUrl?: string;
+  gdriveUploadedCount?: number;
 }
 
 export async function createDemoOrder(input: CreateDemoOrderInput): Promise<PhotoboothOrder> {
@@ -213,6 +216,11 @@ export async function createDemoOrder(input: CreateDemoOrderInput): Promise<Phot
     originalChunks: 1,
     finalChunks: 0,
     doodleDone: false,
+    ...(input.gdriveFolderId ? { gdriveFolderId: input.gdriveFolderId } : {}),
+    ...(input.gdriveFolderUrl ? { gdriveFolderUrl: input.gdriveFolderUrl } : {}),
+    ...(typeof input.gdriveUploadedCount === 'number'
+      ? { gdriveUploadedCount: input.gdriveUploadedCount }
+      : {}),
     createdAt: nowIso,
     updatedAt: nowIso,
   };

@@ -28,6 +28,10 @@ import type {
   ServicePackage,
   StoreSettings,
 } from './types';
+import {
+  isGDriveConfigPackage,
+  packageToGDriveConfig,
+} from './utils/gdriveConfigSync';
 import { isVoucherPackage, packageToVoucher } from './utils/voucher';
 
 const SESSION_DURATION_SECONDS = 360; // 6 minutes per booth session
@@ -243,9 +247,17 @@ export default function App() {
     : packagesSynced
       ? cloudPackages
       : demoState.packages;
-  const parsedPackages = rawPackages.filter((p) => !isVoucherPackage(p));
+  const parsedPackages = rawPackages.filter(
+    (p) => !isVoucherPackage(p) && !isGDriveConfigPackage(p)
+  );
   const packages = parsedPackages.length > 0 ? parsedPackages : DEFAULT_PACKAGES;
-  const vouchers = rawPackages.filter(isVoucherPackage).map(packageToVoucher);
+  const vouchers = rawPackages
+    .filter((p) => isVoucherPackage(p) && !isGDriveConfigPackage(p))
+    .map(packageToVoucher);
+  const cloudGDrivePkg = cloudPackages.find(isGDriveConfigPackage) || null;
+  const cloudGDriveConfig = cloudGDrivePkg
+    ? packageToGDriveConfig(cloudGDrivePkg)
+    : null;
   const frames = preferDemoCatalog
     ? demoState.frames
     : framesSynced
@@ -382,6 +394,7 @@ export default function App() {
               frames={frames}
               settings={settings}
               catalogSynced={catalogSynced}
+              cloudGDriveConfig={cloudGDriveConfig}
               isSessionExpired={isSessionExpired}
               canExtendOnce={!hasExtendedOnce}
               onStartSessionTimer={startSessionTimer}
@@ -396,6 +409,7 @@ export default function App() {
               user={user}
               authLoading={authLoading}
               adminUsingCloud={adminUsingCloud}
+              framesSynced={framesSynced}
               cloudAccessDenied={cloudAccessDenied}
               onResetCloudAccessDenied={() => setCloudAccessDenied(false)}
               onCloudAccessDenied={() => setCloudAccessDenied(true)}
@@ -404,6 +418,7 @@ export default function App() {
               vouchers={vouchers}
               frames={frames}
               settings={settings}
+              cloudGDriveConfig={cloudGDriveConfig}
             />
           )}
         </main>
