@@ -57,6 +57,12 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
       return;
     }
 
+    if (gdriveMeta?.folderUrl) {
+      setFullImageUrl(order.previewThumbUrl || null);
+      setLoadingImage(false);
+      return;
+    }
+
     let cancelled = false;
     const kind = order.doodleDone && order.finalChunks > 0 ? 'final' : 'original';
     const chunkCount = kind === 'final' ? order.finalChunks : order.originalChunks;
@@ -89,6 +95,7 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
     order?.finalChunks,
     order?.originalChunks,
     order?.previewThumbUrl,
+    gdriveMeta?.folderUrl,
   ]);
 
   return (
@@ -165,7 +172,17 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
                     ) : null}
                   </div>
 
-                  {fullImageUrl && (
+                  {gdriveMeta?.folderUrl ? (
+                    <a
+                      href={gdriveMeta.folderUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="whoops-btn whoops-btn-primary w-full py-3.5 text-base inline-flex items-center justify-center gap-2"
+                    >
+                      <ExternalLink className="w-5 h-5" />
+                      Buka Folder Google Drive (Foto Mentah + 4R)
+                    </a>
+                  ) : fullImageUrl ? (
                     <a
                       href={fullImageUrl}
                       download={`WHOOPS-${order.orderCode}-4R-300DPI.png`}
@@ -174,19 +191,7 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
                       <Download className="w-5 h-5" />
                       Unduh Foto 4R (300 DPI PNG)
                     </a>
-                  )}
-
-                  {gdriveMeta?.folderUrl && (
-                    <a
-                      href={gdriveMeta.folderUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="whoops-btn whoops-btn-secondary w-full py-3 text-sm inline-flex items-center justify-center gap-2 mt-2.5"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      Buka Folder Google Drive (Foto Mentah + 4R)
-                    </a>
-                  )}
+                  ) : null}
                 </>
               )}
             </>

@@ -291,12 +291,12 @@ function drawCoverImage(
 
 export function createThumbnailFromCanvas(sourceCanvas: HTMLCanvasElement): string {
   const thumb = document.createElement('canvas');
-  thumb.width = 400;
-  thumb.height = Math.round((400 * CANVAS_4R_HEIGHT) / CANVAS_4R_WIDTH);
+  thumb.width = 260;
+  thumb.height = Math.round((260 * CANVAS_4R_HEIGHT) / CANVAS_4R_WIDTH);
   const tctx = thumb.getContext('2d');
   if (!tctx) return '';
   tctx.drawImage(sourceCanvas, 0, 0, thumb.width, thumb.height);
-  return thumb.toDataURL('image/jpeg', 0.78);
+  return thumb.toDataURL('image/jpeg', 0.68);
 }
 
 export async function buildComposite4R(

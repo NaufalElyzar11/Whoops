@@ -1,12 +1,12 @@
 {
-  "projectId": "hallowed-intelligence-sv0ns",
-  "appId": "1:533696772047:web:ac53de3a19da3d297604ba",
-  "apiKey": "AIzaSyB5Fvh9PuemrLmkr_PI9E-hj_RWVSDe0xQ",
-  "authDomain": "hallowed-intelligence-sv0ns.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-d250747d-f42c-49ec-be17-5694c04004e0",
-  "storageBucket": "hallowed-intelligence-sv0ns.firebasestorage.app",
-  "messagingSenderId": "533696772047",
-  "measurementId": "",
-  "oAuthClientId": "533696772047-n5act7sit46fr039q3i1hn2prf9qlfol.apps.googleusercontent.com",
+  "projectId": "whoops-85260",
+  "appId": "1:369747891896:web:4d2e4c3f26daf2d9c2c64d",
+  "apiKey": "AIzaSyAbOQvEQ9INljo93IL3vIqQcku4D9ndlGA",
+  "authDomain": "whoops-85260.firebaseapp.com",
+  "firestoreDatabaseId": "",
+  "storageBucket": "whoops-85260.firebasestorage.app",
+  "messagingSenderId": "369747891896",
+  "measurementId": "G-ZWX1QQG9VV",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }

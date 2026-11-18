@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -18,7 +19,7 @@ import {
   DEFAULT_PACKAGES,
   DEFAULT_STORE_SETTINGS,
 } from '../constants/defaults';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../firebase';
 import type {
   PhotoFrame,
   PhotoboothOrder,
@@ -103,10 +104,11 @@ export function subscribeFrames(
 
 export function subscribeOrders(
   onData: (orders: PhotoboothOrder[]) => void,
-  onError?: (err: unknown) => void
+  onError?: (err: unknown) => void,
+  maxOrders = 80
 ): Unsubscribe {
   const path = 'orders';
-  const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+  const q = query(collection(db, path), orderBy('createdAt', 'desc'), limit(maxOrders));
   return onSnapshot(
     q,
     (snap) => {
@@ -144,6 +146,23 @@ export function subscribeSingleOrder(
 
 export async function seedInitialCatalogIfEmpty(): Promise<void> {
   try {
+    const currentUser = auth.currentUser;
+    if (currentUser?.uid && currentUser.email) {
+      try {
+        const adminRef = doc(db, 'admins', currentUser.uid);
+        const adminSnap = await getDoc(adminRef);
+        if (!adminSnap.exists()) {
+          await setDoc(adminRef, {
+            email: currentUser.email.trim().slice(0, 120),
+            role: 'admin',
+            createdAt: serverTimestamp(),
+          });
+        }
+      } catch {
+        // Ignore if current database rules restrict self-registration after initial seed
+      }
+    }
+
     const settingsRef = doc(db, 'settings', 'store');
     const settingsSnap = await getDoc(settingsRef);
     const packagesSnap = await getDocs(collection(db, 'packages'));
@@ -622,5 +641,42 @@ export async function deleteFrame(frameId: string): Promise<void> {
     await deleteDoc(doc(db, 'frames', frameId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export function isOrderReadyForCloudMediaPurge(
+  order: PhotoboothOrder,
+  gdriveFolderUrl?: string
+): boolean {
+  if (order.paymentStatus === 'REJECTED') return true;
+  if (order.paymentStatus !== 'VERIFIED') return false;
+
+  const hasGdrive = Boolean((gdriveFolderUrl || order.gdriveFolderUrl || '').trim());
+  if (!hasGdrive) return false;
+  if (order.includesDoodle && !order.doodleDone) return false;
+  if (order.wantsPrint && order.printStatus !== 'PRINTED') return false;
+
+  return true;
+}
+
+/**
+ * Deletes heavy base64 chunks (`original_*`, `raw_*`, `final_*`, `gdrive_pending`)
+ * from `orders/{orderId}/media` while keeping `gdrive_meta` intact.
+ */
+export async function purgeOrderCloudMedia(orderId: string): Promise<number> {
+  try {
+    const mediaCol = collection(db, 'orders', orderId, 'media');
+    const snap = await getDocs(mediaCol);
+    const docsToDelete = snap.docs.filter((d) => d.id !== GDRIVE_META_DOC_ID);
+    if (docsToDelete.length === 0) return 0;
+
+    const batch = writeBatch(db);
+    for (const d of docsToDelete) {
+      batch.delete(d.ref);
+    }
+    await batch.commit();
+    return docsToDelete.length;
+  } catch {
+    return 0;
   }
 }

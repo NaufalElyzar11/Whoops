@@ -4,9 +4,7 @@ import {
   CheckCircle2,
   CloudUpload,
   Copy,
-  Download,
   ExternalLink,
-  FolderArchive,
   FolderOpen,
   Loader2,
   Sparkles,
@@ -26,14 +24,6 @@ interface OrderQrModalProps {
   gdriveWarning?: string | null;
   onUploadToGdrive: (order: PhotoboothOrder) => void;
   onClose: () => void;
-  onDownloadHighRes: (
-    order: PhotoboothOrder,
-    kind: 'original' | 'final',
-    filename: string
-  ) => void;
-  isDownloading: boolean;
-  onDownloadAll?: (order: PhotoboothOrder) => void;
-  isDownloadingAll?: boolean;
 }
 
 export function OrderQrModal({
@@ -45,10 +35,6 @@ export function OrderQrModal({
   gdriveWarning,
   onUploadToGdrive,
   onClose,
-  onDownloadHighRes,
-  isDownloading,
-  onDownloadAll,
-  isDownloadingAll = false,
 }: OrderQrModalProps) {
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -64,7 +50,6 @@ export function OrderQrModal({
   const hasGdriveFolder = Boolean(gdriveFolderUrl);
   const fallbackDownloadUrl = `${window.location.origin}${import.meta.env.BASE_URL}?download=${encodeURIComponent(order.id)}`;
   const qrTargetUrl = hasGdriveFolder ? gdriveFolderUrl : fallbackDownloadUrl;
-  const mediaKind = order.doodleDone && order.finalChunks > 0 ? 'final' : 'original';
   const hasAppsScriptUrl = Boolean(gdriveConfig.webAppUrl.trim());
 
   return (
@@ -241,40 +226,8 @@ export function OrderQrModal({
               <p className="text-xs text-[#61433B] leading-relaxed">
                 {hasGdriveFolder
                   ? 'Arahkan kamera HP pelanggan ke QR Code untuk membuka folder Google Drive berisi semua foto mentah + hasil 4R.'
-                  : 'Arahkan kamera HP pelanggan ke QR Code di samping untuk mengunduh hasil foto resolusi 300 DPI.'}
+                  : 'Arahkan kamera HP pelanggan ke QR Code di samping untuk membuka halaman unduh pesanan.'}
               </p>
-            )}
-
-            <button
-              type="button"
-              onClick={() =>
-                onDownloadHighRes(
-                  order,
-                  mediaKind,
-                  `WHOOPS-${order.orderCode}-4R-300DPI.png`
-                )
-              }
-              disabled={isDownloading || isDownloadingAll}
-              className="whoops-btn whoops-btn-secondary w-full py-2.5 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Download className="w-4 h-4" aria-hidden="true" />
-              <span>{isDownloading ? 'Mengunduh...' : 'Unduh PNG 300 DPI (Laptop)'}</span>
-            </button>
-
-            {onDownloadAll && (
-              <button
-                type="button"
-                onClick={() => onDownloadAll(order)}
-                disabled={isDownloadingAll || isDownloading}
-                className="whoops-btn whoops-btn-ghost w-full py-2.5 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <FolderArchive className="w-4 h-4" aria-hidden="true" />
-                <span>
-                  {isDownloadingAll
-                    ? 'Menyiapkan ZIP...'
-                    : 'Unduh Semua (4R + Mentah .zip)'}
-                </span>
-              </button>
             )}
           </div>
         </div>

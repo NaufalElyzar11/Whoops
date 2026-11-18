@@ -1,10 +1,36 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import rawAppletConfig from '../firebase-applet-config.json';
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const env = import.meta.env;
+
+export const activeFirebaseConfig = {
+  apiKey: (env.VITE_FIREBASE_API_KEY as string | undefined)?.trim() || rawAppletConfig.apiKey,
+  authDomain:
+    (env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined)?.trim() || rawAppletConfig.authDomain,
+  projectId:
+    (env.VITE_FIREBASE_PROJECT_ID as string | undefined)?.trim() || rawAppletConfig.projectId,
+  storageBucket:
+    (env.VITE_FIREBASE_STORAGE_BUCKET as string | undefined)?.trim() ||
+    rawAppletConfig.storageBucket,
+  messagingSenderId:
+    (env.VITE_FIREBASE_MESSAGING_SENDER_ID as string | undefined)?.trim() ||
+    rawAppletConfig.messagingSenderId,
+  appId: (env.VITE_FIREBASE_APP_ID as string | undefined)?.trim() || rawAppletConfig.appId,
+  firestoreDatabaseId:
+    (env.VITE_FIREBASE_DATABASE_ID as string | undefined)?.trim() ??
+    (rawAppletConfig as { firestoreDatabaseId?: string }).firestoreDatabaseId ??
+    '',
+};
+
+const app = initializeApp(activeFirebaseConfig);
+const configuredDbId = activeFirebaseConfig.firestoreDatabaseId.trim();
+
+export const db =
+  configuredDbId && configuredDbId !== '(default)'
+    ? getFirestore(app, configuredDbId)
+    : getFirestore(app);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });

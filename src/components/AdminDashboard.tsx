@@ -6,7 +6,6 @@ import {
   signOut,
   type User,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
 import appsScriptCodeRaw from '../../google-apps-script/Code.gs?raw';
 import {
   CheckCircle2,
@@ -14,7 +13,6 @@ import {
   Copy,
   Download,
   ExternalLink,
-  FolderArchive,
   FolderOpen,
   HelpCircle,
   Loader2,
@@ -31,7 +29,7 @@ import {
 } from 'lucide-react';
 import { getAdminAccessUrl, getBoothBaseUrl } from '../App';
 import { DEFAULT_FRAMES, formatOrderTime, rupiah } from '../constants/defaults';
-import { auth, googleProvider } from '../firebase';
+import { activeFirebaseConfig, auth, googleProvider } from '../firebase';
 import {
   deleteDemoFrame,
   deleteDemoPackage,
@@ -54,7 +52,9 @@ import {
   fetchOrderGDrivePending,
   fetchOrderMediaDataUrl,
   fetchOrderRawPhotos,
+  isOrderReadyForCloudMediaPurge,
   markOrderPrinted,
+  purgeOrderCloudMedia,
   rejectOrderPayment,
   saveCloudGDriveConfig,
   saveFrame,
@@ -94,10 +94,8 @@ import {
 } from '../utils/voucher';
 import { getFrameLayerOrder, getFrameSlotCount } from '../utils/frameLayouts';
 import {
-  buildZipBlob,
   dataUrlToUint8Array,
   triggerBlobDownload,
-  type ZipDataUrlEntry,
 } from '../utils/zipDownload';
 import { DoodleStudioModal } from './DoodleStudioModal';
 import { FramePreviewCanvas } from './FramePreviewCanvas';
@@ -156,7 +154,7 @@ export function AdminDashboard({
   const [activeDoodleOrder, setActiveDoodleOrder] = useState<PhotoboothOrder | null>(null);
   const [activeQrOrder, setActiveQrOrder] = useState<PhotoboothOrder | null>(null);
   const [downloadingOrderId, setDownloadingOrderId] = useState<string | null>(null);
-  const [downloadingAllOrderId, setDownloadingAllOrderId] = useState<string | null>(null);
+  const [isPurgingCloudMedia, setIsPurgingCloudMedia] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [copiedLinkKind, setCopiedLinkKind] = useState<'admin' | 'booth' | null>(null);
 
@@ -394,7 +392,7 @@ export function AdminDashboard({
 
     if (code === 'auth/unauthorized-domain') {
       const host = window.location.hostname || window.location.origin;
-      return `Domain "${host}" belum diizinkan di Firebase Authentication -> Settings -> Authorized domains (Project: ${firebaseConfig.projectId}).`;
+      return `Domain "${host}" belum diizinkan di Firebase Authentication -> Settings -> Authorized domains (Project: ${activeFirebaseConfig.projectId}).`;
     }
     if (code === 'auth/popup-closed-by-user') {
       return 'Jendela login Google ditutup sebelum proses masuk selesai.';
@@ -542,49 +540,13 @@ export function AdminDashboard({
     return { composite4RPng, doodle4RPng, rawPhotos };
   };
 
-  const handleDownloadAllOrderMedia = async (order: PhotoboothOrder) => {
-    setDownloadingAllOrderId(order.id);
-    try {
-      const { composite4RPng, doodle4RPng, rawPhotos } =
-        await collectOrderMediaAssets(order);
-      const entries: ZipDataUrlEntry[] = [];
-
-      if (composite4RPng) {
-        entries.push({
-          filename: `WHOOPS-${order.orderCode}-4R-300DPI.png`,
-          dataUrl: composite4RPng,
-        });
-      }
-      if (doodle4RPng && doodle4RPng !== composite4RPng) {
-        entries.push({
-          filename: `WHOOPS-${order.orderCode}-DOODLE-4R-300DPI.png`,
-          dataUrl: doodle4RPng,
-        });
-      }
-      rawPhotos.forEach((raw, idx) => {
-        if (!raw.dataUrl) return;
-        const ext = raw.dataUrl.startsWith('data:image/png') ? 'png' : 'jpg';
-        entries.push({
-          filename: raw.filename?.trim() || `Pose-${String(idx + 1).padStart(2, '0')}.${ext}`,
-          dataUrl: raw.dataUrl,
-        });
-      });
-
-      if (entries.length === 0) {
-        showToast(`Belum ada file foto yang tersimpan untuk ${order.orderCode}.`);
-        return;
-      }
-
-      const zipBlob = buildZipBlob(entries);
-      triggerBlobDownload(zipBlob, `WHOOPS-${order.orderCode}-SEMUA.zip`);
-      showToast(
-        `${entries.length} file (4R + mentah) diunduh dalam WHOOPS-${order.orderCode}-SEMUA.zip.`
-      );
-    } catch {
-      showToast(`Gagal menyiapkan ZIP unduhan untuk ${order.orderCode}.`);
-    } finally {
-      setDownloadingAllOrderId(null);
-    }
+  const maybeAutoPurgeOrderCloudMedia = async (
+    targetOrder: PhotoboothOrder,
+    resolvedGdriveUrl?: string
+  ) => {
+    if (!adminUsingCloud) return;
+    if (!isOrderReadyForCloudMediaPurge(targetOrder, resolvedGdriveUrl)) return;
+    await purgeOrderCloudMedia(targetOrder.id);
   };
 
   const persistSettings = async (nextSettings: StoreSettings) => {
@@ -661,6 +623,7 @@ export function AdminDashboard({
         const cloudMeta = await fetchOrderGDriveMeta(targetOrder.id);
         if (cloudMeta?.folderUrl) {
           applyResolvedGdriveInfo(targetOrder, cloudMeta);
+          void maybeAutoPurgeOrderCloudMedia(targetOrder, cloudMeta.folderUrl);
           showToast(`Folder Google Drive siap (${targetOrder.orderCode}).`);
           return;
         }
@@ -687,6 +650,7 @@ export function AdminDashboard({
           });
           if (completedFromBooth?.folderUrl) {
             applyResolvedGdriveInfo(targetOrder, completedFromBooth);
+            void maybeAutoPurgeOrderCloudMedia(targetOrder, completedFromBooth.folderUrl);
             showToast(`Folder Google Drive selesai diunggah dari Booth (${targetOrder.orderCode}).`);
             return;
           }
@@ -718,6 +682,7 @@ export function AdminDashboard({
       if (adminUsingCloud) {
         try {
           await saveOrderGDriveMeta(targetOrder.id, gdriveInfo);
+          await maybeAutoPurgeOrderCloudMedia(targetOrder, gdriveInfo.folderUrl);
         } catch (metaErr) {
           console.warn('Cloud GDrive link sync skipped/failed:', metaErr);
         }
@@ -771,7 +736,9 @@ export function AdminDashboard({
 
       const existingFolderUrl =
         verifiedOrder.gdriveFolderUrl || gdriveLinkMap[verifiedOrder.id]?.folderUrl;
-      if (gdriveConfig.webAppUrl.trim() && !existingFolderUrl) {
+      if (existingFolderUrl) {
+        void maybeAutoPurgeOrderCloudMedia(verifiedOrder, existingFolderUrl);
+      } else if (gdriveConfig.webAppUrl.trim()) {
         void triggerUploadOrderToGdrive(verifiedOrder);
       }
     } catch {
@@ -787,6 +754,7 @@ export function AdminDashboard({
       });
       if (adminUsingCloud) {
         await rejectOrderPayment(order.id);
+        void purgeOrderCloudMedia(order.id);
       }
       showToast(`Pesanan ${order.orderCode} ditolak.`);
     } catch {
@@ -809,6 +777,12 @@ export function AdminDashboard({
       });
       if (adminUsingCloud) {
         await markOrderPrinted(order.id);
+        const existingFolderUrl =
+          order.gdriveFolderUrl || gdriveLinkMap[order.id]?.folderUrl;
+        void maybeAutoPurgeOrderCloudMedia(
+          { ...order, printStatus: 'PRINTED', workflowStatus: 'Completed' },
+          existingFolderUrl
+        );
       }
       showToast(`Pesanan ${order.orderCode} ditandai sudah dicetak.`);
     } catch {
@@ -1056,6 +1030,39 @@ export function AdminDashboard({
     [rawBaseOrders, gdriveLinkMap]
   );
 
+  const handleBulkPurgeCloudMedia = async () => {
+    if (!adminUsingCloud || isPurgingCloudMedia) return;
+    const candidates = orders.filter((o) =>
+      isOrderReadyForCloudMediaPurge(o, o.gdriveFolderUrl)
+    );
+    if (candidates.length === 0) {
+      showToast('Belum ada pesanan selesai (sudah di Google Drive) yang perlu dibersihkan.');
+      return;
+    }
+
+    setIsPurgingCloudMedia(true);
+    try {
+      let deletedChunks = 0;
+      let cleanedOrders = 0;
+      for (const ord of candidates) {
+        const count = await purgeOrderCloudMedia(ord.id);
+        if (count > 0) {
+          deletedChunks += count;
+          cleanedOrders += 1;
+        }
+      }
+      if (deletedChunks > 0) {
+        showToast(
+          `Cache Firestore dibersihkan: ${deletedChunks} chunk foto dari ${cleanedOrders} pesanan selesai dihapus (link GDrive tetap aman).`
+        );
+      } else {
+        showToast('Cache Firestore sudah bersih untuk semua pesanan yang selesai.');
+      }
+    } finally {
+      setIsPurgingCloudMedia(false);
+    }
+  };
+
   const filteredOrders = orders.filter((o) => {
     const matchesStatus = statusFilter === 'ALL' || o.paymentStatus === statusFilter;
     const matchesSearch =
@@ -1258,44 +1265,6 @@ export function AdminDashboard({
               <div className="flex flex-wrap gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={() =>
-                    void handleDownloadHighRes(
-                      latestPendingOrder,
-                      latestPendingOrder.doodleDone && latestPendingOrder.finalChunks > 0
-                        ? 'final'
-                        : 'original',
-                      `PRINT-4R-${latestPendingOrder.orderCode}-300DPI.png`
-                    )
-                  }
-                  disabled={
-                    downloadingOrderId === latestPendingOrder.id ||
-                    downloadingAllOrderId === latestPendingOrder.id
-                  }
-                  className="whoops-btn whoops-btn-secondary px-3.5 py-2.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>
-                    {downloadingOrderId === latestPendingOrder.id ? 'Mengunduh...' : 'Unduh 4R'}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDownloadAllOrderMedia(latestPendingOrder)}
-                  disabled={
-                    downloadingAllOrderId === latestPendingOrder.id ||
-                    downloadingOrderId === latestPendingOrder.id
-                  }
-                  className="whoops-btn whoops-btn-ghost px-3.5 py-2.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <FolderArchive className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>
-                    {downloadingAllOrderId === latestPendingOrder.id
-                      ? 'Menyiapkan ZIP...'
-                      : 'Unduh Semua (.zip)'}
-                  </span>
-                </button>
-                <button
-                  type="button"
                   onClick={() => void handleVerifyAndOpenQr(latestPendingOrder)}
                   className="whoops-btn whoops-btn-primary px-4 py-2.5 text-xs sm:text-sm cursor-pointer"
                 >
@@ -1325,7 +1294,7 @@ export function AdminDashboard({
               />
             </div>
 
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               {(
                 [
                   ['ALL', 'Semua'],
@@ -1346,6 +1315,25 @@ export function AdminDashboard({
                   {label}
                 </button>
               ))}
+
+              {adminUsingCloud && (
+                <button
+                  type="button"
+                  disabled={isPurgingCloudMedia}
+                  onClick={() => void handleBulkPurgeCloudMedia()}
+                  className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  title="Hapus chunk foto Base64 di Firestore untuk pesanan yang sudah selesai & sudah masuk Google Drive"
+                >
+                  {isPurgingCloudMedia ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                  <span>
+                    {isPurgingCloudMedia ? 'Membersihkan...' : 'Bersihkan Cache Cloud'}
+                  </span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1441,32 +1429,6 @@ export function AdminDashboard({
                           <div className="inline-flex items-center gap-1.5">
                             <button
                               type="button"
-                              onClick={() =>
-                                void handleDownloadHighRes(
-                                  o,
-                                  o.doodleDone && o.finalChunks > 0 ? 'final' : 'original',
-                                  `WHOOPS-${o.orderCode}-4R-300DPI.png`
-                                )
-                              }
-                              disabled={downloadingOrderId === o.id || downloadingAllOrderId === o.id}
-                              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
-                              title="Unduh langsung PNG 4R 300 DPI (frame + foto)"
-                            >
-                              <Download className="w-3 h-3" aria-hidden="true" />
-                              <span>{downloadingOrderId === o.id ? '...' : '4R'}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleDownloadAllOrderMedia(o)}
-                              disabled={downloadingAllOrderId === o.id || downloadingOrderId === o.id}
-                              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
-                              title="Unduh semua (4R + foto mentah) dalam file ZIP"
-                            >
-                              <FolderArchive className="w-3 h-3" aria-hidden="true" />
-                              <span>{downloadingAllOrderId === o.id ? 'ZIP...' : 'Semua'}</span>
-                            </button>
-                            <button
-                              type="button"
                               onClick={() => void handleVerifyAndOpenQr(o)}
                               className="whoops-btn whoops-btn-primary whoops-btn-compact px-2.5 py-1 text-[11px] cursor-pointer"
                             >
@@ -1494,32 +1456,6 @@ export function AdminDashboard({
                                 <span>GDrive</span>
                               </a>
                             )}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void handleDownloadHighRes(
-                                  o,
-                                  o.doodleDone && o.finalChunks > 0 ? 'final' : 'original',
-                                  `WHOOPS-${o.orderCode}-4R-300DPI.png`
-                                )
-                              }
-                              disabled={downloadingOrderId === o.id || downloadingAllOrderId === o.id}
-                              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
-                              title="Unduh langsung PNG 4R 300 DPI (frame + foto)"
-                            >
-                              <Download className="w-3 h-3" aria-hidden="true" />
-                              <span>{downloadingOrderId === o.id ? '...' : '4R'}</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleDownloadAllOrderMedia(o)}
-                              disabled={downloadingAllOrderId === o.id || downloadingOrderId === o.id}
-                              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
-                              title="Unduh semua (4R + foto mentah) dalam file ZIP"
-                            >
-                              <FolderArchive className="w-3 h-3" aria-hidden="true" />
-                              <span>{downloadingAllOrderId === o.id ? 'ZIP...' : 'Semua'}</span>
-                            </button>
                             <button
                               type="button"
                               onClick={() => {
@@ -1683,21 +1619,11 @@ export function AdminDashboard({
                             `PRINT-4R-${o.orderCode}-300DPI.png`
                           )
                         }
-                        disabled={downloadingOrderId === o.id || downloadingAllOrderId === o.id}
+                        disabled={downloadingOrderId === o.id}
                         className="whoops-btn whoops-btn-secondary whoops-btn-compact flex-1 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
                       >
                         <Download className="w-3.5 h-3.5" aria-hidden="true" />
                         <span>Ekspor 4R</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleDownloadAllOrderMedia(o)}
-                        disabled={downloadingAllOrderId === o.id || downloadingOrderId === o.id}
-                        className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
-                        title="Unduh semua (4R + foto mentah) dalam file ZIP"
-                      >
-                        <FolderArchive className="w-3.5 h-3.5" aria-hidden="true" />
-                        <span>{downloadingAllOrderId === o.id ? 'ZIP...' : 'Semua'}</span>
                       </button>
                       <button
                         type="button"
@@ -2383,6 +2309,10 @@ export function AdminDashboard({
                   if (adminUsingCloud) {
                     try {
                       await saveOrderGDriveMeta(targetOrder.id, gdriveInfo);
+                      await maybeAutoPurgeOrderCloudMedia(
+                        { ...targetOrder, doodleDone: true },
+                        gdriveInfo.folderUrl
+                      );
                     } catch (metaErr) {
                       console.warn('Cloud GDrive link sync skipped/failed:', metaErr);
                     }
@@ -2411,10 +2341,6 @@ export function AdminDashboard({
           gdriveWarning={gdriveUploadWarning}
           onUploadToGdrive={(ord) => void triggerUploadOrderToGdrive(ord, true)}
           onClose={() => setActiveQrOrder(null)}
-          onDownloadHighRes={handleDownloadHighRes}
-          isDownloading={downloadingOrderId === activeQrOrder.id}
-          onDownloadAll={(ord) => void handleDownloadAllOrderMedia(ord)}
-          isDownloadingAll={downloadingAllOrderId === activeQrOrder.id}
         />
       )}
     </section>
