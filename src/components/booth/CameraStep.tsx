@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import type { CapturedPhoto } from '../../types';
 
+const SHOW_DEMO_POSE_CONTROLS = false;
+
 export interface RetakeTarget {
   photoId: string;
   slotNumber?: number;
@@ -180,14 +182,16 @@ export function CameraStep({
                   <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
                   Muat Ulang Kamera
                 </button>
-                <button
-                  type="button"
-                  onClick={onCaptureDemoPose}
-                  className="whoops-btn whoops-btn-primary whoops-btn-compact px-3.5 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" aria-hidden="true" />
-                  Ambil Pose Demo
-                </button>
+                {SHOW_DEMO_POSE_CONTROLS && (
+                  <button
+                    type="button"
+                    onClick={onCaptureDemoPose}
+                    className="whoops-btn whoops-btn-primary whoops-btn-compact px-3.5 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    Ambil Pose Demo
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -338,15 +342,17 @@ export function CameraStep({
           </div>
 
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5">
-            <button
-              type="button"
-              onClick={onCaptureDemoPose}
-              disabled={countdownVal !== null}
-              className="whoops-btn whoops-btn-secondary px-4 py-2.5 text-xs sm:text-sm inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
-            >
-              <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
-              <span>{retakeTarget ? 'Pose Demo (Retake)' : 'Ambil Pose Demo'}</span>
-            </button>
+            {SHOW_DEMO_POSE_CONTROLS && (
+              <button
+                type="button"
+                onClick={onCaptureDemoPose}
+                disabled={countdownVal !== null}
+                className="whoops-btn whoops-btn-secondary px-4 py-2.5 text-xs sm:text-sm inline-flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>{retakeTarget ? 'Pose Demo (Retake)' : 'Ambil Pose Demo'}</span>
+              </button>
+            )}
             <motion.button
               type="button"
               whileTap={{ scale: 0.96 }}
@@ -395,7 +401,15 @@ export function CameraStep({
 
           {photos.length === 0 ? (
             <div className="p-6 text-center text-xs text-[#61433B] bg-[#EFE2CE] rounded-2xl border-2 border-dashed border-[#3A231E]/50">
-              Tekan <b>CAPTURE (3s)</b> atau <b>Ambil Pose Demo</b> untuk mulai memotret. Kamu bebas mengambil lebih dari {requiredPhotoCount} foto lalu memilih pose terbaik!
+              {SHOW_DEMO_POSE_CONTROLS ? (
+                <>
+                  Tekan <b>CAPTURE (3s)</b> atau <b>Ambil Pose Demo</b> untuk mulai memotret. Kamu bebas mengambil lebih dari {requiredPhotoCount} foto lalu memilih pose terbaik!
+                </>
+              ) : (
+                <>
+                  Tekan <b>CAPTURE (3s)</b> untuk mulai memotret. Kamu bebas mengambil lebih dari {requiredPhotoCount} foto lalu memilih pose terbaik!
+                </>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2.5 max-h-[340px] md:max-h-[390px] overflow-y-auto whoops-scroll pr-1">
@@ -461,7 +475,7 @@ export function CameraStep({
         </div>
 
         <div className="mt-4 space-y-2.5 pt-3 border-t-2 border-dashed border-[#3A231E]/20">
-          {!retakeTarget?.returnToEditor && (
+          {SHOW_DEMO_POSE_CONTROLS && !retakeTarget?.returnToEditor && (
             <button
               type="button"
               onClick={onCaptureDemoSixAndProceed}

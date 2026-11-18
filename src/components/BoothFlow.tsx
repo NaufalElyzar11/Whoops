@@ -204,7 +204,7 @@ export function BoothFlow({
     const initCamera = async () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         const msg =
-          'Browser ini belum mendukung akses kamera. Pastikan situs memakai HTTPS atau gunakan tombol "Ambil Pose Demo".';
+          'Browser ini belum mendukung akses kamera. Pastikan situs memakai HTTPS dan izinkan akses kamera.';
         setCameraError(msg);
         setCamStatusMsg(msg);
         return;
@@ -227,7 +227,7 @@ export function BoothFlow({
         }
         setCameraReady(true);
         setCameraError(null);
-        setCamStatusMsg('Kamera aktif (rasio sudah pas slot frame). Tekan CAPTURE (3s) atau gunakan Pose Demo.');
+        setCamStatusMsg('Kamera aktif (rasio sudah pas slot frame). Tekan CAPTURE (3s) untuk memotret.');
       } catch {
         if (cancelled) return;
         const msg =
