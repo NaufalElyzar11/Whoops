@@ -291,7 +291,7 @@ export function CheckoutStep({
               </h1>
             </div>
             <span className="font-display font-bold text-xs text-[#6D1D3A] bg-[#EFE2CE] px-2.5 py-1 rounded-lg border border-[#3A231E]">
-              @azzzahrraaaa
+              @artisticwaves.ra
             </span>
           </div>
 

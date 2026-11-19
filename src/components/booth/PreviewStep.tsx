@@ -80,7 +80,7 @@ export function PreviewStep({
               </div>
               <div className="flex justify-between gap-3">
                 <span className="text-[#61433B]">Studio</span>
-                <b className="font-display text-[#6D1D3A]">@azzzahrraaaa</b>
+                <b className="font-display text-[#6D1D3A]">@artisticwaves.ra</b>
               </div>
             </div>
 
