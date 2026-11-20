@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   CloudUpload,
@@ -8,9 +9,11 @@ import {
   Pause,
   Play,
   Receipt,
+  RefreshCw,
   Sparkles,
   Store,
   Tag,
+  WifiOff,
   X,
 } from 'lucide-react';
 import { rupiah } from '../../constants/defaults';
@@ -40,7 +43,10 @@ interface CheckoutStepProps {
   settings: StoreSettings;
   finalCompositePng: string | null;
   isSubmittingOrder: boolean;
+  submitStage: string | null;
   orderError: string | null;
+  isOnline: boolean;
+  orderSyncMode: 'cloud' | 'local-demo';
   currentOrderId: string | null;
   liveOrder: PhotoboothOrder | null;
   bgGdriveStatus: 'idle' | 'uploading' | 'ready' | 'error';
@@ -65,7 +71,10 @@ export function CheckoutStep({
   settings,
   finalCompositePng,
   isSubmittingOrder,
+  submitStage,
   orderError,
+  isOnline,
+  orderSyncMode,
   currentOrderId,
   liveOrder,
   bgGdriveStatus,
@@ -130,13 +139,30 @@ export function CheckoutStep({
             </div>
           ) : (
             <>
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-100 border-2 border-[#3A231E] text-xs font-display font-bold text-emerald-900 mb-3">
-                <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
-                <span>Pesanan Terkirim ke Kasir</span>
+              <div
+                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg border-2 border-[#3A231E] text-xs font-display font-bold mb-3 ${
+                  orderSyncMode === 'cloud'
+                    ? 'bg-emerald-100 text-emerald-900'
+                    : 'bg-amber-100 text-amber-900'
+                }`}
+              >
+                {orderSyncMode === 'cloud' ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                    <span>Pesanan Terkirim ke Kasir</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="w-4 h-4" aria-hidden="true" />
+                    <span>Mode Demo Lokal (Perangkat Ini Saja)</span>
+                  </>
+                )}
               </div>
 
               <h1 className="font-display font-bold text-2xl sm:text-3xl text-[#3A231E]">
-                Foto Kamu Sudah Masuk ke Kasir!
+                {orderSyncMode === 'cloud'
+                  ? 'Foto Kamu Sudah Masuk ke Kasir!'
+                  : 'Foto Tersimpan di Perangkat Ini'}
               </h1>
 
               {/* Latest Queue Visual Confirmation Card (No code memorization required) */}
@@ -566,10 +592,32 @@ export function CheckoutStep({
           )}
         </div>
 
-        <div className="mt-5">
+        <div className="mt-5 space-y-3">
+          {!isOnline && (
+            <div
+              role="status"
+              className="p-3 rounded-xl bg-amber-100 border-2 border-[#3A231E] text-xs text-amber-950 text-left flex items-start gap-2.5"
+            >
+              <WifiOff className="w-4 h-4 text-amber-900 shrink-0 mt-0.5" aria-hidden="true" />
+              <div>
+                <div className="font-display font-bold">Wi-Fi Booth Sedang Terputus</div>
+                <p className="mt-0.5 leading-snug">
+                  Sambungkan kembali Wi-Fi sebelum mengirim pesanan agar foto benar-benar masuk ke layar kasir. Foto kamu tetap aman di layar ini.
+                </p>
+              </div>
+            </div>
+          )}
+
           {orderError && (
-            <div className="mb-3 p-3 rounded-xl bg-rose-100 border border-[#6D1D3A] text-xs text-[#6D1D3A] text-left">
-              {orderError}
+            <div
+              role="alert"
+              className="p-3.5 rounded-xl bg-rose-100 border-2 border-[#6D1D3A] text-xs text-[#6D1D3A] text-left flex items-start gap-2.5"
+            >
+              <AlertTriangle className="w-4 h-4 text-[#6D1D3A] shrink-0 mt-0.5" aria-hidden="true" />
+              <div>
+                <div className="font-display font-bold">Pesanan Belum Masuk ke Kasir</div>
+                <p className="mt-0.5 leading-snug text-[#3A231E]">{orderError}</p>
+              </div>
             </div>
           )}
 
@@ -583,7 +631,12 @@ export function CheckoutStep({
             {isSubmittingOrder ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
-                <span>Mengirim ke Kasir...</span>
+                <span>{submitStage || 'Mengirim ke Kasir...'}</span>
+              </>
+            ) : orderError ? (
+              <>
+                <RefreshCw className="w-5 h-5" aria-hidden="true" />
+                <span>COBA KIRIM ULANG KE KASIR</span>
               </>
             ) : (
               <>

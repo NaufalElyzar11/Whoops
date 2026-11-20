@@ -8,11 +8,14 @@ import {
 } from 'firebase/auth';
 import appsScriptCodeRaw from '../../google-apps-script/Code.gs?raw';
 import {
+  AlertTriangle,
+  Calendar,
   CheckCircle2,
   CloudUpload,
   Copy,
   Download,
   ExternalLink,
+  FileSpreadsheet,
   FolderOpen,
   HelpCircle,
   Loader2,
@@ -22,6 +25,7 @@ import {
   Plus,
   Printer,
   QrCode,
+  RefreshCw,
   Save,
   Search,
   Tag,
@@ -46,12 +50,14 @@ import {
   type OrderGDriveLinkInfo,
 } from '../services/demoStore';
 import {
+  DEFAULT_ORDERS_PAGE_SIZE,
   deleteFrame,
   deletePackage,
   fetchOrderGDriveMeta,
   fetchOrderGDrivePending,
   fetchOrderMediaDataUrl,
   fetchOrderRawPhotos,
+  fetchOrdersByDateRange,
   isOrderReadyForCloudMediaPurge,
   markOrderPrinted,
   purgeOrderCloudMedia,
@@ -93,6 +99,15 @@ import {
   voucherToPackage,
 } from '../utils/voucher';
 import { getFrameLayerOrder, getFrameSlotCount } from '../utils/frameLayouts';
+import {
+  buildDailyRecap,
+  exportOrdersToCsv,
+  formatRecapTextSummary,
+  getLocalDayBounds,
+  getTodayDateKey,
+  isOrderAmountUnexpected,
+  parseOrderDate,
+} from '../utils/orderReport';
 import {
   dataUrlToUint8Array,
   triggerBlobDownload,
@@ -145,9 +160,22 @@ export function AdminDashboard({
 }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<AdminTab>('orders');
   const [cloudOrders, setCloudOrders] = useState<PhotoboothOrder[]>([]);
+  const [orderFetchLimit, setOrderFetchLimit] = useState<number>(DEFAULT_ORDERS_PAGE_SIZE);
   const [ordersLoading, setOrdersLoading] = useState(false);
+  const [isLoadingMoreOrders, setIsLoadingMoreOrders] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  const [recapScope, setRecapScope] = useState<'date' | 'all'>('date');
+  const [recapDateKey, setRecapDateKey] = useState<string>(() => getTodayDateKey());
+  const [fetchedDateRecap, setFetchedDateRecap] = useState<{
+    dateKey: string;
+    orders: PhotoboothOrder[];
+  } | null>(null);
+  const [isLoadingRecapDate, setIsLoadingRecapDate] = useState(false);
+  const [isExportingCsv, setIsExportingCsv] = useState(false);
+  const [copiedRecapText, setCopiedRecapText] = useState(false);
+  const [recapError, setRecapError] = useState<string | null>(null);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PENDING_VERIFICATION' | 'VERIFIED' | 'REJECTED'>('ALL');
@@ -225,13 +253,14 @@ export function AdminDashboard({
     if (!user || !adminUsingCloud) {
       setCloudOrders([]);
       setOrdersLoading(false);
+      setIsLoadingMoreOrders(false);
       setCloudCatalogSeeded(false);
+      setFetchedDateRecap(null);
       syncedDemoFramesToCloudRef.current.clear();
       return;
     }
 
     let cancelled = false;
-    let unsub: (() => void) | undefined;
     setOrdersLoading(true);
     setAccessError(null);
     setCloudCatalogSeeded(false);
@@ -240,20 +269,6 @@ export function AdminDashboard({
       .then(() => {
         if (cancelled) return;
         setCloudCatalogSeeded(true);
-        unsub = subscribeOrders(
-          (list) => {
-            setCloudOrders(list);
-            setOrdersLoading(false);
-          },
-          () => {
-            if (cancelled) return;
-            setAccessError(
-              `Akun ${user.email || user.uid} tidak memiliki izin Admin di Firestore (UID: ${user.uid}). Login dengan akun admin utama atau daftarkan UID ini ke koleksi admins. Dashboard tetap berjalan di Mode Demo Lokal.`
-            );
-            onCloudAccessDenied();
-            setOrdersLoading(false);
-          }
-        );
       })
       .catch(() => {
         if (cancelled) return;
@@ -266,9 +281,37 @@ export function AdminDashboard({
 
     return () => {
       cancelled = true;
-      if (unsub) unsub();
     };
   }, [user, adminUsingCloud, onCloudAccessDenied]);
+
+  useEffect(() => {
+    if (!user || !adminUsingCloud || !cloudCatalogSeeded) return;
+
+    let cancelled = false;
+    const unsub = subscribeOrders(
+      (list) => {
+        if (cancelled) return;
+        setCloudOrders(list);
+        setOrdersLoading(false);
+        setIsLoadingMoreOrders(false);
+      },
+      () => {
+        if (cancelled) return;
+        setAccessError(
+          `Akun ${user.email || user.uid} tidak memiliki izin Admin di Firestore (UID: ${user.uid}). Login dengan akun admin utama atau daftarkan UID ini ke koleksi admins. Dashboard tetap berjalan di Mode Demo Lokal.`
+        );
+        onCloudAccessDenied();
+        setOrdersLoading(false);
+        setIsLoadingMoreOrders(false);
+      },
+      orderFetchLimit
+    );
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [user, adminUsingCloud, cloudCatalogSeeded, orderFetchLimit, onCloudAccessDenied]);
 
   useEffect(() => {
     if (!user || !adminUsingCloud || !framesSynced || !cloudCatalogSeeded) return;
@@ -1014,21 +1057,151 @@ export function AdminDashboard({
     }
   };
 
-  const rawBaseOrders = adminUsingCloud ? cloudOrders : demoOrders;
+  const enrichWithGdrive = (list: PhotoboothOrder[]): PhotoboothOrder[] =>
+    list.map((o) => {
+      const g = gdriveLinkMap[o.id];
+      if (!g && !o.gdriveFolderUrl) return o;
+      return {
+        ...o,
+        gdriveFolderId: o.gdriveFolderId || g?.folderId,
+        gdriveFolderUrl: o.gdriveFolderUrl || g?.folderUrl,
+        gdriveUploadedCount: o.gdriveUploadedCount ?? g?.fileCount,
+      };
+    });
+
+  const rawBaseOrders = adminUsingCloud ? cloudOrders : demoOrders.slice(0, orderFetchLimit);
   const orders = useMemo(
-    () =>
-      rawBaseOrders.map((o) => {
-        const g = gdriveLinkMap[o.id];
-        if (!g && !o.gdriveFolderUrl) return o;
-        return {
-          ...o,
-          gdriveFolderId: o.gdriveFolderId || g?.folderId,
-          gdriveFolderUrl: o.gdriveFolderUrl || g?.folderUrl,
-          gdriveUploadedCount: o.gdriveUploadedCount ?? g?.fileCount,
-        };
-      }),
+    () => enrichWithGdrive(rawBaseOrders),
     [rawBaseOrders, gdriveLinkMap]
   );
+
+  const hasMoreOrders = adminUsingCloud
+    ? cloudOrders.length >= orderFetchLimit
+    : demoOrders.length > orderFetchLimit;
+
+  const handleLoadMoreOrders = () => {
+    if (isLoadingMoreOrders) return;
+    if (adminUsingCloud) setIsLoadingMoreOrders(true);
+    setOrderFetchLimit((prev) => prev + DEFAULT_ORDERS_PAGE_SIZE);
+  };
+
+  const recapMayBeIncomplete = useMemo(() => {
+    if (!adminUsingCloud || recapScope !== 'date') return false;
+    if (fetchedDateRecap?.dateKey === recapDateKey) return false;
+    if (cloudOrders.length < orderFetchLimit) return false;
+
+    const bounds = getLocalDayBounds(recapDateKey);
+    if (!bounds) return false;
+
+    const oldestLoaded = cloudOrders[cloudOrders.length - 1];
+    const oldestDate = parseOrderDate(oldestLoaded?.createdAt);
+    if (!oldestDate) return true;
+    return oldestDate.getTime() >= bounds.start.getTime();
+  }, [adminUsingCloud, recapScope, fetchedDateRecap, recapDateKey, cloudOrders, orderFetchLimit]);
+
+  const recapSourceOrders = useMemo(() => {
+    if (!adminUsingCloud) {
+      return enrichWithGdrive(demoOrders);
+    }
+    if (recapScope === 'date' && fetchedDateRecap?.dateKey === recapDateKey) {
+      const merged = new Map<string, PhotoboothOrder>();
+      for (const o of fetchedDateRecap.orders) merged.set(o.id, o);
+      for (const o of orders) merged.set(o.id, o);
+      return enrichWithGdrive(Array.from(merged.values())).sort((a, b) => {
+        const da = parseOrderDate(a.createdAt)?.getTime() || 0;
+        const db = parseOrderDate(b.createdAt)?.getTime() || 0;
+        return db - da;
+      });
+    }
+    return orders;
+  }, [adminUsingCloud, demoOrders, recapScope, fetchedDateRecap, recapDateKey, orders, gdriveLinkMap]);
+
+  const dailyRecap = useMemo(
+    () => buildDailyRecap(recapSourceOrders, recapScope === 'date' ? recapDateKey : 'ALL'),
+    [recapSourceOrders, recapScope, recapDateKey]
+  );
+
+  const handleFetchDateRecap = async (targetDateKey = recapDateKey): Promise<PhotoboothOrder[] | null> => {
+    if (!adminUsingCloud) return null;
+    const bounds = getLocalDayBounds(targetDateKey);
+    if (!bounds) return null;
+
+    setIsLoadingRecapDate(true);
+    setRecapError(null);
+    try {
+      const fetched = await fetchOrdersByDateRange(bounds.start, bounds.end);
+      setFetchedDateRecap({ dateKey: targetDateKey, orders: fetched });
+      return fetched;
+    } catch {
+      setRecapError('Gagal memuat data lengkap tanggal tersebut. Periksa koneksi internet kasir.');
+      return null;
+    } finally {
+      setIsLoadingRecapDate(false);
+    }
+  };
+
+  const handleExportCsv = async () => {
+    if (isExportingCsv) return;
+    setIsExportingCsv(true);
+    setRecapError(null);
+    try {
+      let targetOrders = dailyRecap.ordersForPeriod;
+
+      if (adminUsingCloud && recapScope === 'date' && recapMayBeIncomplete) {
+        const fetched = await handleFetchDateRecap(recapDateKey);
+        if (fetched) {
+          const merged = new Map<string, PhotoboothOrder>();
+          for (const o of fetched) merged.set(o.id, o);
+          for (const o of orders) merged.set(o.id, o);
+          const enriched = enrichWithGdrive(Array.from(merged.values())).sort((a, b) => {
+            const da = parseOrderDate(a.createdAt)?.getTime() || 0;
+            const db = parseOrderDate(b.createdAt)?.getTime() || 0;
+            return db - da;
+          });
+          targetOrders = buildDailyRecap(enriched, recapDateKey).ordersForPeriod;
+        }
+      }
+
+      if (targetOrders.length === 0) {
+        showToast('Tidak ada pesanan pada periode ini untuk diexport.');
+        return;
+      }
+
+      const label = recapScope === 'date' ? recapDateKey : `Semua-${targetOrders.length}`;
+      exportOrdersToCsv(targetOrders, label);
+      showToast(`Rekap ${targetOrders.length} pesanan diunduh sebagai CSV.`);
+    } finally {
+      setIsExportingCsv(false);
+    }
+  };
+
+  const handleCopyRecapSummary = async () => {
+    setRecapError(null);
+    let recapToCopy = dailyRecap;
+
+    if (adminUsingCloud && recapScope === 'date' && recapMayBeIncomplete) {
+      const fetched = await handleFetchDateRecap(recapDateKey);
+      if (fetched) {
+        const merged = new Map<string, PhotoboothOrder>();
+        for (const o of fetched) merged.set(o.id, o);
+        for (const o of orders) merged.set(o.id, o);
+        const enriched = enrichWithGdrive(Array.from(merged.values()));
+        recapToCopy = buildDailyRecap(enriched, recapDateKey);
+      }
+    }
+
+    const periodLabel =
+      recapScope === 'date' ? recapDateKey : `Semua dimuat (${orders.length} pesanan)`;
+    const text = formatRecapTextSummary(recapToCopy, periodLabel);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedRecapText(true);
+      window.setTimeout(() => setCopiedRecapText(false), 2200);
+      showToast('Ringkasan omzet disalin, siap tempel ke WhatsApp.');
+    } catch {
+      showToast('Gagal menyalin otomatis. Gunakan tombol Export CSV.');
+    }
+  };
 
   const handleBulkPurgeCloudMedia = async () => {
     if (!adminUsingCloud || isPurgingCloudMedia) return;
@@ -1251,8 +1424,27 @@ export function AdminDashboard({
                     {latestPendingOrder.packageName}
                     {latestPendingOrder.wantsPrint ? ' + Cetak 4R' : ''}
                   </div>
-                  <div className="font-display font-bold text-2xl text-[#6D1D3A] tabular-nums">
-                    {rupiah(latestPendingOrder.totalAmount)}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="font-display font-bold text-2xl text-[#6D1D3A] tabular-nums">
+                      {rupiah(latestPendingOrder.totalAmount)}
+                    </div>
+                    {(() => {
+                      const check = isOrderAmountUnexpected(
+                        latestPendingOrder,
+                        packages,
+                        settings.printAddonPrice
+                      );
+                      if (!check.unexpected) return null;
+                      return (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 border border-[#3A231E] text-[11px] font-display font-bold text-amber-950"
+                          title={`Harga normal paket ini tanpa voucher adalah ${rupiah(check.expectedTotal)}`}
+                        >
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                          <span>Cek nominal (normal {rupiah(check.expectedTotal)})</span>
+                        </span>
+                      );
+                    })()}
                   </div>
                   {latestPendingOrder.doodleNotes && (
                     <p className="text-xs text-[#61433B] mt-0.5 truncate">
@@ -1280,6 +1472,189 @@ export function AdminDashboard({
               </div>
             </div>
           )}
+
+          {/* Rekap Omzet Harian & Export CSV */}
+          <div className="whoops-card p-4 sm:p-5">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2 text-xs font-display font-semibold text-[#61433B]">
+                  <Calendar className="w-3.5 h-3.5 text-[#6D1D3A]" aria-hidden="true" />
+                  <span>
+                    {recapScope === 'date'
+                      ? recapDateKey === getTodayDateKey()
+                        ? `Rekap Omzet Hari Ini (${recapDateKey})`
+                        : `Rekap Omzet Tanggal ${recapDateKey}`
+                      : `Rekap Omzet (${orders.length} Pesanan Dimuat)`}
+                  </span>
+                </div>
+
+                <div className="mt-1.5 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                  <div className="font-display font-bold text-2xl sm:text-3xl text-[#6D1D3A] tabular-nums">
+                    {rupiah(dailyRecap.verifiedRevenue)}
+                  </div>
+                  <div className="text-xs sm:text-sm text-[#3A231E] tabular-nums">
+                    <b>{dailyRecap.verifiedCount}</b> lunas
+                    <span className="mx-1.5 text-[#61433B]">|</span>
+                    <b>{dailyRecap.printCount}</b> cetak 4R
+                    <span className="mx-1.5 text-[#61433B]">|</span>
+                    <b>{dailyRecap.doodleCount}</b> doodle
+                  </div>
+                </div>
+
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#61433B] tabular-nums">
+                  <span>
+                    Menunggu bayar: <b className="text-[#3A231E]">{dailyRecap.pendingCount}</b> ({rupiah(dailyRecap.pendingRevenue)})
+                  </span>
+                  <span>|</span>
+                  <span>
+                    Ditolak: <b className="text-[#3A231E]">{dailyRecap.rejectedCount}</b>
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <div className="inline-flex rounded-xl border-2 border-[#3A231E] bg-[#EFE2CE] p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecapScope('date');
+                      setRecapError(null);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-display font-semibold cursor-pointer min-h-[38px] ${
+                      recapScope === 'date'
+                        ? 'bg-[#6D1D3A] text-[#FDF7EE]'
+                        : 'text-[#3A231E] hover:bg-[#FDF7EE]/60'
+                    }`}
+                  >
+                    Per Tanggal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecapScope('all');
+                      setRecapError(null);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-display font-semibold cursor-pointer min-h-[38px] ${
+                      recapScope === 'all'
+                        ? 'bg-[#6D1D3A] text-[#FDF7EE]'
+                        : 'text-[#3A231E] hover:bg-[#FDF7EE]/60'
+                    }`}
+                  >
+                    Semua Dimuat
+                  </button>
+                </div>
+
+                {recapScope === 'date' && (
+                  <>
+                    <label className="inline-flex items-center">
+                      <span className="sr-only">Pilih tanggal rekap</span>
+                      <input
+                        type="date"
+                        value={recapDateKey}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          if (next) {
+                            setRecapDateKey(next);
+                            setRecapError(null);
+                          }
+                        }}
+                        className="min-h-[44px] px-3 py-1.5 text-xs font-mono-tabular border-2 border-[#3A231E] rounded-xl bg-white text-[#3A231E]"
+                      />
+                    </label>
+                    {recapDateKey !== getTodayDateKey() && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRecapDateKey(getTodayDateKey());
+                          setRecapError(null);
+                        }}
+                        className="whoops-btn whoops-btn-ghost px-3 py-2 text-xs cursor-pointer whitespace-nowrap"
+                      >
+                        Hari Ini
+                      </button>
+                    )}
+                  </>
+                )}
+
+                <button
+                  type="button"
+                  disabled={isLoadingRecapDate}
+                  onClick={() => void handleCopyRecapSummary()}
+                  className="whoops-btn whoops-btn-ghost px-3 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{copiedRecapText ? 'Tersalin!' : 'Salin Ringkasan'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isExportingCsv}
+                  onClick={() => void handleExportCsv()}
+                  className="whoops-btn whoops-btn-secondary px-3.5 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  {isExportingCsv ? (
+                    <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <FileSpreadsheet className="w-4 h-4" aria-hidden="true" />
+                  )}
+                  <span>{isExportingCsv ? 'Menyiapkan CSV...' : 'Export CSV'}</span>
+                </button>
+              </div>
+            </div>
+
+            {dailyRecap.packageBreakdown.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-dashed border-[#3A231E]/20 flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-display font-semibold text-[#61433B]">
+                  Rincian paket lunas:
+                </span>
+                {dailyRecap.packageBreakdown.map((item) => (
+                  <span
+                    key={item.packageName}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#EFE2CE] border border-[#3A231E]/35 text-[#3A231E] tabular-nums"
+                  >
+                    <span className="font-display font-semibold">{item.packageName}</span>
+                    <span className="text-[#61433B]">{item.count}x</span>
+                    <span className="font-bold text-[#6D1D3A]">{rupiah(item.revenue)}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {recapScope === 'date' &&
+              adminUsingCloud &&
+              fetchedDateRecap?.dateKey === recapDateKey && (
+                <div className="mt-2 text-[11px] text-[#61433B] tabular-nums">
+                  Data lengkap tanggal {recapDateKey} sudah ditarik dari server ({dailyRecap.ordersForPeriod.length} pesanan).
+                </div>
+              )}
+
+            {recapMayBeIncomplete && (
+              <div className="mt-3 pt-3 border-t border-dashed border-[#3A231E]/25 flex flex-wrap items-center justify-between gap-2 text-xs text-[#61433B]">
+                <span>
+                  Antrean kasir saat ini memuat {orders.length} pesanan terbaru agar ringan di Wi-Fi. Tarik data lengkap untuk memastikan semua transaksi tanggal {recapDateKey} terhitung.
+                </span>
+                <button
+                  type="button"
+                  disabled={isLoadingRecapDate}
+                  onClick={() => void handleFetchDateRecap(recapDateKey)}
+                  className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3 py-1 text-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+                >
+                  {isLoadingRecapDate ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                  )}
+                  <span>{isLoadingRecapDate ? 'Menarik data...' : 'Tarik Data Lengkap Tanggal Ini'}</span>
+                </button>
+              </div>
+            )}
+
+            {recapError && (
+              <div role="alert" className="mt-3 p-2.5 rounded-xl bg-rose-100 border border-[#6D1D3A] text-xs text-[#6D1D3A]">
+                {recapError}
+              </div>
+            )}
+          </div>
 
           <div className="whoops-card overflow-hidden">
           <div className="p-4 border-b border-[#3A231E]/15 flex flex-wrap items-center justify-between gap-3 bg-[#EFE2CE]/40">
@@ -1375,6 +1750,8 @@ export function AdminDashboard({
                               <img
                                 src={o.previewThumbUrl}
                                 alt={`Thumb ${o.orderCode}`}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-full h-full object-contain"
                               />
                             </div>
@@ -1408,7 +1785,24 @@ export function AdminDashboard({
                         )}
                       </td>
                       <td className="py-3 px-4 font-display font-bold text-[#6D1D3A] tabular-nums">
-                        {rupiah(o.totalAmount)}
+                        <div>{rupiah(o.totalAmount)}</div>
+                        {(() => {
+                          const check = isOrderAmountUnexpected(
+                            o,
+                            packages,
+                            settings.printAddonPrice
+                          );
+                          if (!check.unexpected) return null;
+                          return (
+                            <div
+                              className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 border border-[#3A231E]/50 text-[10px] font-semibold text-amber-950"
+                              title={`Harga normal paket ini tanpa voucher adalah ${rupiah(check.expectedTotal)}`}
+                            >
+                              <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                              <span>Cek nominal</span>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="py-3 px-4">
                         <span
@@ -1479,6 +1873,33 @@ export function AdminDashboard({
                 )}
               </tbody>
             </table>
+          </div>
+
+          <div className="px-4 py-3 border-t border-[#3A231E]/15 bg-[#EFE2CE]/35 flex flex-wrap items-center justify-between gap-3 text-xs text-[#61433B]">
+            <span className="tabular-nums">
+              Menampilkan <b>{filteredOrders.length}</b> dari <b>{orders.length}</b> pesanan termuat
+              {adminUsingCloud ? ' (hemat kuota & Wi-Fi)' : ' (mode demo lokal)'}.
+            </span>
+
+            {hasMoreOrders && (
+              <button
+                type="button"
+                disabled={isLoadingMoreOrders}
+                onClick={handleLoadMoreOrders}
+                className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3.5 py-1.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                {isLoadingMoreOrders ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                )}
+                <span>
+                  {isLoadingMoreOrders
+                    ? 'Memuat pesanan lama...'
+                    : `Muat ${DEFAULT_ORDERS_PAGE_SIZE} pesanan lebih lama`}
+                </span>
+              </button>
+            )}
           </div>
           </div>
         </div>

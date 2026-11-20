@@ -58,6 +58,7 @@ interface BoothFlowProps {
   frames: PhotoFrame[];
   settings: StoreSettings;
   catalogSynced: boolean;
+  preferDemoCatalog: boolean;
   cloudGDriveConfig: Pick<GoogleDriveConfig, 'webAppUrl' | 'rootFolderId'> | null;
   isSessionExpired: boolean;
   canExtendOnce: boolean;
@@ -100,6 +101,7 @@ export function BoothFlow({
   frames,
   settings,
   catalogSynced,
+  preferDemoCatalog,
   cloudGDriveConfig,
   isSessionExpired,
   canExtendOnce,
@@ -136,9 +138,14 @@ export function BoothFlow({
   const [isCompositing, setIsCompositing] = useState(false);
 
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [submitStage, setSubmitStage] = useState<string | null>(null);
   const [orderError, setOrderError] = useState<string | null>(null);
   const [currentOrderId, setCurrentOrderId] = useState<string | null>(null);
+  const [orderSyncMode, setOrderSyncMode] = useState<'cloud' | 'local-demo'>('cloud');
   const [liveOrder, setLiveOrder] = useState<PhotoboothOrder | null>(null);
+  const [isOnline, setIsOnline] = useState<boolean>(() =>
+    typeof navigator === 'undefined' ? true : navigator.onLine !== false
+  );
 
   const [bgGdriveStatus, setBgGdriveStatus] = useState<'idle' | 'uploading' | 'ready' | 'error'>('idle');
   const [bgGdriveProgress, setBgGdriveProgress] = useState<GDriveUploadProgress | null>(null);
@@ -149,6 +156,18 @@ export function BoothFlow({
   const retakeTargetRef = useRef<RetakeTarget | null>(null);
   const bgTrackerRef = useRef<BgUploadTracker | null>(null);
   const bgTrackerSeqRef = useRef(0);
+  const failedCloudOrderIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     retakeTargetRef.current = retakeTarget;
@@ -268,17 +287,18 @@ export function BoothFlow({
       const found = state.orders.find((o) => o.id === currentOrderId) || null;
       mergeLiveOrder(found);
     });
-    const unsubCloud = catalogSynced
-      ? subscribeSingleOrder(currentOrderId, (ord) => {
-          mergeLiveOrder(ord);
-        })
-      : () => {};
+    const unsubCloud =
+      orderSyncMode === 'cloud' || catalogSynced
+        ? subscribeSingleOrder(currentOrderId, (ord) => {
+            mergeLiveOrder(ord);
+          })
+        : () => {};
 
     return () => {
       unsubDemo();
       unsubCloud();
     };
-  }, [currentOrderId, catalogSynced, onOrderSubmittedChange]);
+  }, [currentOrderId, orderSyncMode, catalogSynced, onOrderSubmittedChange]);
 
   const resetAllSessionState = useCallback(() => {
     stopCamera();
@@ -294,11 +314,14 @@ export function BoothFlow({
     setFinalCompositePng(null);
     setPreviewThumbUrl('');
     setCurrentOrderId(null);
+    setOrderSyncMode('cloud');
+    setSubmitStage(null);
     setLiveOrder(null);
     setOrderError(null);
     setRetakeTarget(null);
     setLastCapturedId(null);
     bgTrackerRef.current = null;
+    failedCloudOrderIdsRef.current.clear();
     setBgGdriveStatus('idle');
     setBgGdriveProgress(null);
   }, [stopCamera]);
@@ -367,7 +390,7 @@ export function BoothFlow({
       dataUrl: photo.dataUrl,
     }));
     const compositeSnapshot = finalCompositePng;
-    const useCloudSync = catalogSynced;
+    const useCloudSync = !preferDemoCatalog;
 
     void (async () => {
       try {
@@ -477,7 +500,7 @@ export function BoothFlow({
         }
       }
     })();
-  }, [step, currentOrderId, finalCompositePng, photos, catalogSynced, resolveEffectiveGdriveConfig]);
+  }, [step, currentOrderId, finalCompositePng, photos, preferDemoCatalog, resolveEffectiveGdriveConfig]);
 
   const handleStartNewSession = () => {
     resetAllSessionState();
@@ -741,6 +764,7 @@ export function BoothFlow({
     if (!pkgToSubmit || !frameToSubmit || !finalCompositePng) return;
 
     setIsSubmittingOrder(true);
+    setSubmitStage('Menyiapkan pesanan...');
     setOrderError(null);
     const effectivePrint =
       pkgToSubmit.code === 'PHOTO_ONLY' ? wantsPrintOpt : pkgToSubmit.includesPrint;
@@ -751,8 +775,12 @@ export function BoothFlow({
     const notesWithVoucher = appendVoucherNote(doodleNotes, appliedVoucher, discountAmount);
 
     const tracker = bgTrackerRef.current;
-    const orderId =
-      tracker?.draftOrderId || `ord-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const canReuseDraftId =
+      Boolean(tracker?.draftOrderId) &&
+      !failedCloudOrderIdsRef.current.has(tracker!.draftOrderId);
+    const orderId = canReuseDraftId
+      ? tracker!.draftOrderId
+      : `ord-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const orderCode =
       tracker?.draftOrderCode || `WHP-${Math.floor(1000 + Math.random() * 9000)}`;
     if (tracker) {
@@ -764,8 +792,110 @@ export function BoothFlow({
       dataUrl: photo.dataUrl,
     }));
 
-    const persistOrder = async () => {
-      await createDemoOrder({
+    const mustSyncCloud = !preferDemoCatalog;
+
+    const persistOrder = async (): Promise<{
+      mode: 'cloud' | 'local-demo';
+      confirmedOrder: PhotoboothOrder;
+    }> => {
+      if (mustSyncCloud) {
+        await createPhotoboothOrder({
+          orderId,
+          orderCode,
+          pkg: pkgToSubmit,
+          frameId: frameToSubmit.id,
+          wantsPrint: effectivePrint,
+          doodleNotes: notesWithVoucher,
+          totalAmount,
+          fullPngDataUrl: finalCompositePng,
+          previewThumbUrl,
+          rawPhotos: rawPhotosPayload,
+          onProgress: (stage) => setSubmitStage(stage),
+        });
+
+        if (tracker?.result) {
+          await saveOrderGDriveMeta(
+            orderId,
+            {
+              folderId: tracker.result.folderId,
+              folderUrl: tracker.result.folderUrl,
+              fileCount: tracker.result.fileCount,
+            },
+            { kind: 'original', docId: 'gdrive_meta' }
+          ).catch(() => {});
+        } else if (tracker?.folderId && tracker?.folderUrl) {
+          await saveOrderGDriveMeta(
+            orderId,
+            {
+              folderId: tracker.folderId,
+              folderUrl: tracker.folderUrl,
+              fileCount: 0,
+            },
+            { kind: 'original', docId: 'gdrive_pending' }
+          ).catch(() => {});
+        }
+
+        const nowIso = new Date().toISOString();
+        const confirmedOrder: PhotoboothOrder = {
+          id: orderId,
+          orderCode,
+          packageId: pkgToSubmit.id,
+          packageName: pkgToSubmit.name.slice(0, 80),
+          frameId: frameToSubmit.id,
+          includesDoodle: pkgToSubmit.includesDoodle,
+          wantsPrint: effectivePrint,
+          doodleNotes: notesWithVoucher.trim().slice(0, 300),
+          totalAmount,
+          paymentStatus: 'PENDING_VERIFICATION',
+          printStatus: effectivePrint ? 'QUEUED' : 'NOT_APPLICABLE',
+          workflowStatus: 'Waiting for Payment',
+          previewThumbUrl,
+          originalChunks: 1,
+          finalChunks: 0,
+          doodleDone: false,
+          ...(tracker?.result?.folderId || tracker?.folderId
+            ? { gdriveFolderId: tracker?.result?.folderId || tracker?.folderId }
+            : {}),
+          ...(tracker?.result?.folderUrl || tracker?.folderUrl
+            ? { gdriveFolderUrl: tracker?.result?.folderUrl || tracker?.folderUrl }
+            : {}),
+          ...(typeof tracker?.result?.fileCount === 'number'
+            ? { gdriveUploadedCount: tracker.result.fileCount }
+            : {}),
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+
+        // Mirror locally as cache only after Cloud Firestore confirms commit
+        try {
+          await createDemoOrder({
+            orderId,
+            orderCode,
+            pkg: pkgToSubmit,
+            frameId: frameToSubmit.id,
+            wantsPrint: effectivePrint,
+            doodleNotes: notesWithVoucher,
+            totalAmount,
+            previewThumbUrl,
+            fullPngDataUrl: finalCompositePng,
+            rawPhotos: rawPhotosPayload,
+            gdriveFolderId: tracker?.result?.folderId || tracker?.folderId,
+            gdriveFolderUrl: tracker?.result?.folderUrl || tracker?.folderUrl,
+            gdriveUploadedCount: tracker?.result?.fileCount,
+          });
+          if (tracker?.result) {
+            saveOrderGDriveLink(orderId, tracker.result);
+          }
+        } catch (localCacheErr) {
+          console.warn('Local cache mirror skipped after cloud sync:', localCacheErr);
+        }
+
+        return { mode: 'cloud', confirmedOrder };
+      }
+
+      // Explicit single-device local demo mode
+      setSubmitStage('Menyimpan pesanan ke mode demo lokal...');
+      const localOrder = await createDemoOrder({
         orderId,
         orderCode,
         pkg: pkgToSubmit,
@@ -785,62 +915,36 @@ export function BoothFlow({
         saveOrderGDriveLink(orderId, tracker.result);
       }
 
-      if (catalogSynced) {
-        try {
-          await createPhotoboothOrder({
-            orderId,
-            orderCode,
-            pkg: pkgToSubmit,
-            frameId: frameToSubmit.id,
-            wantsPrint: effectivePrint,
-            doodleNotes: notesWithVoucher,
-            totalAmount,
-            fullPngDataUrl: finalCompositePng,
-            previewThumbUrl,
-            rawPhotos: rawPhotosPayload,
-          });
-
-          if (tracker?.result) {
-            await saveOrderGDriveMeta(
-              orderId,
-              {
-                folderId: tracker.result.folderId,
-                folderUrl: tracker.result.folderUrl,
-                fileCount: tracker.result.fileCount,
-              },
-              { kind: 'original', docId: 'gdrive_meta' }
-            ).catch(() => {});
-          } else if (tracker?.folderId && tracker?.folderUrl) {
-            await saveOrderGDriveMeta(
-              orderId,
-              {
-                folderId: tracker.folderId,
-                folderUrl: tracker.folderUrl,
-                fileCount: 0,
-              },
-              { kind: 'original', docId: 'gdrive_pending' }
-            ).catch(() => {});
-          }
-        } catch (cloudErr) {
-          console.warn('Cloud Firestore sync skipped/failed, local demo order active:', cloudErr);
-        }
-      }
+      return { mode: 'local-demo', confirmedOrder: localOrder };
     };
 
     const creationPromise = persistOrder();
     if (tracker) {
-      tracker.orderCreatedPromise = creationPromise;
+      tracker.orderCreatedPromise = creationPromise.then(() => undefined);
     }
 
     try {
-      await creationPromise;
+      const { mode, confirmedOrder } = await creationPromise;
+      setOrderSyncMode(mode);
+      setLiveOrder(confirmedOrder);
       setCurrentOrderId(orderId);
     } catch (err) {
-      if (tracker) tracker.submittedOrderId = null;
-      console.error(err);
-      setOrderError('Gagal menyimpan pesanan & foto ke antrean kasir. Silakan coba lagi.');
+      if (mustSyncCloud) {
+        failedCloudOrderIdsRef.current.add(orderId);
+      }
+      if (tracker) {
+        tracker.submittedOrderId = null;
+        tracker.orderCreatedPromise = null;
+      }
+      console.error('Order submission failed:', err);
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : 'Gagal mengirim pesanan ke meja kasir. Periksa Wi-Fi lalu coba lagi.';
+      setOrderError(message);
     } finally {
       setIsSubmittingOrder(false);
+      setSubmitStage(null);
     }
   };
 
@@ -969,7 +1073,10 @@ export function BoothFlow({
           settings={settings}
           finalCompositePng={finalCompositePng}
           isSubmittingOrder={isSubmittingOrder}
+          submitStage={submitStage}
           orderError={orderError}
+          isOnline={isOnline}
+          orderSyncMode={orderSyncMode}
           currentOrderId={currentOrderId}
           liveOrder={liveOrder}
           bgGdriveStatus={bgGdriveStatus}
@@ -998,7 +1105,11 @@ export function BoothFlow({
         </motion.div>
       </AnimatePresence>
 
-      {isSessionExpired && step !== 'welcome' && !currentOrderId && (
+      {isSessionExpired &&
+        step !== 'welcome' &&
+        !currentOrderId &&
+        !isSubmittingOrder &&
+        !orderError && (
         <SessionTimeoutModal
           hasPhotos={photos.length > 0}
           canExtendOnce={canExtendOnce}

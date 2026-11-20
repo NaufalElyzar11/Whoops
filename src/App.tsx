@@ -394,6 +394,7 @@ export default function App() {
               frames={frames}
               settings={settings}
               catalogSynced={catalogSynced}
+              preferDemoCatalog={preferDemoCatalog}
               cloudGDriveConfig={cloudGDriveConfig}
               isSessionExpired={isSessionExpired}
               canExtendOnce={!hasExtendedOnce}

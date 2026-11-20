@@ -10,7 +10,9 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  Timestamp,
   updateDoc,
+  where,
   writeBatch,
   type Unsubscribe,
 } from 'firebase/firestore';
@@ -102,10 +104,12 @@ export function subscribeFrames(
   );
 }
 
+export const DEFAULT_ORDERS_PAGE_SIZE = 25;
+
 export function subscribeOrders(
   onData: (orders: PhotoboothOrder[]) => void,
   onError?: (err: unknown) => void,
-  maxOrders = 80
+  maxOrders = DEFAULT_ORDERS_PAGE_SIZE
 ): Unsubscribe {
   const path = 'orders';
   const q = query(collection(db, path), orderBy('createdAt', 'desc'), limit(maxOrders));
@@ -120,6 +124,25 @@ export function subscribeOrders(
       else handleFirestoreError(error, OperationType.LIST, path);
     }
   );
+}
+
+export async function fetchOrdersByDateRange(
+  startDate: Date,
+  endDate: Date
+): Promise<PhotoboothOrder[]> {
+  const path = 'orders';
+  try {
+    const q = query(
+      collection(db, path),
+      where('createdAt', '>=', Timestamp.fromDate(startDate)),
+      where('createdAt', '<=', Timestamp.fromDate(endDate)),
+      orderBy('createdAt', 'desc')
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<PhotoboothOrder, 'id'>) }));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
 }
 
 export function subscribeSingleOrder(
@@ -226,6 +249,113 @@ export async function seedInitialCatalogIfEmpty(): Promise<void> {
   }
 }
 
+export type CloudOrderErrorKind =
+  | 'offline'
+  | 'timeout'
+  | 'quota'
+  | 'permission'
+  | 'unknown';
+
+export class CloudOrderSyncError extends Error {
+  readonly kind: CloudOrderErrorKind;
+  readonly causeError?: unknown;
+
+  constructor(kind: CloudOrderErrorKind, message: string, causeError?: unknown) {
+    super(message);
+    this.name = 'CloudOrderSyncError';
+    this.kind = kind;
+    this.causeError = causeError;
+  }
+}
+
+const ORDER_DOC_TIMEOUT_MS = 15000;
+const MEDIA_BATCH_TIMEOUT_MS = 20000;
+const MEDIA_WRITE_CONCURRENCY = 3;
+
+function assertDeviceOnline(): void {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new CloudOrderSyncError(
+      'offline',
+      'Koneksi Wi-Fi booth sedang terputus. Sambungkan kembali Wi-Fi lalu tekan Coba Kirim Ulang ke Kasir. Foto kamu tetap aman.'
+    );
+  }
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new CloudOrderSyncError('timeout', timeoutMessage));
+    }, timeoutMs);
+
+    promise.then(
+      (val) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
+function toCloudOrderSyncError(error: unknown, stageLabel: string): CloudOrderSyncError {
+  if (error instanceof CloudOrderSyncError) return error;
+
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code || '').toLowerCase()
+      : '';
+  const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  if (
+    (typeof navigator !== 'undefined' && navigator.onLine === false) ||
+    code.includes('unavailable') ||
+    msg.includes('client is offline') ||
+    msg.includes('network')
+  ) {
+    return new CloudOrderSyncError(
+      'offline',
+      'Koneksi ke server kasir terputus saat mengirim foto. Periksa Wi-Fi booth lalu tekan Coba Kirim Ulang ke Kasir. Foto kamu tidak hilang.',
+      error
+    );
+  }
+
+  if (code.includes('resource-exhausted') || msg.includes('quota')) {
+    return new CloudOrderSyncError(
+      'quota',
+      'Kuota server Firebase penuh untuk sementara. Mohon panggil penjaga kasir sebelum meninggalkan booth.',
+      error
+    );
+  }
+
+  if (code.includes('permission-denied') || msg.includes('missing or insufficient permissions')) {
+    return new CloudOrderSyncError(
+      'permission',
+      'Server kasir menolak penyimpanan pesanan (izin/aturan database). Mohon panggil penjaga kasir.',
+      error
+    );
+  }
+
+  return new CloudOrderSyncError(
+    'unknown',
+    `Gagal ${stageLabel} ke layar kasir. Periksa Wi-Fi lalu tekan Coba Kirim Ulang ke Kasir.`,
+    error
+  );
+}
+
 export interface CreateOrderInput {
   orderId?: string;
   orderCode?: string;
@@ -237,9 +367,12 @@ export interface CreateOrderInput {
   fullPngDataUrl: string;
   previewThumbUrl: string;
   rawPhotos?: RawPhotoPayload[];
+  onProgress?: (stage: string) => void;
 }
 
 export async function createPhotoboothOrder(input: CreateOrderInput): Promise<string> {
+  assertDeviceOnline();
+
   const orderId =
     input.orderId || `ord-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const orderCode =
@@ -252,40 +385,59 @@ export async function createPhotoboothOrder(input: CreateOrderInput): Promise<st
     chunks = chunkDataUrl(input.previewThumbUrl, 380000);
   }
 
-  const orderPath = `orders/${orderId}`;
+  input.onProgress?.('Mendaftarkan pesanan ke meja kasir...');
   try {
-    await setDoc(doc(db, 'orders', orderId), {
-      orderCode,
-      packageId: input.pkg.id,
-      packageName: input.pkg.name.slice(0, 80),
-      frameId: input.frameId,
-      includesDoodle: input.pkg.includesDoodle,
-      wantsPrint: input.wantsPrint,
-      doodleNotes: sanitizedNotes,
-      totalAmount: Number(input.totalAmount),
-      paymentStatus: 'PENDING_VERIFICATION',
-      printStatus: input.wantsPrint ? 'QUEUED' : 'NOT_APPLICABLE',
-      workflowStatus: 'Waiting for Payment',
-      previewThumbUrl: input.previewThumbUrl.slice(0, 349000),
-      originalChunks: chunks.length,
-      finalChunks: 0,
-      doodleDone: false,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    await withTimeout(
+      setDoc(doc(db, 'orders', orderId), {
+        orderCode,
+        packageId: input.pkg.id,
+        packageName: input.pkg.name.slice(0, 80),
+        frameId: input.frameId,
+        includesDoodle: input.pkg.includesDoodle,
+        wantsPrint: input.wantsPrint,
+        doodleNotes: sanitizedNotes,
+        totalAmount: Number(input.totalAmount),
+        paymentStatus: 'PENDING_VERIFICATION',
+        printStatus: input.wantsPrint ? 'QUEUED' : 'NOT_APPLICABLE',
+        workflowStatus: 'Waiting for Payment',
+        previewThumbUrl: input.previewThumbUrl.slice(0, 349000),
+        originalChunks: chunks.length,
+        finalChunks: 0,
+        doodleDone: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }),
+      ORDER_DOC_TIMEOUT_MS,
+      'Koneksi ke server kasir terlalu lambat atau terputus. Periksa Wi-Fi booth lalu tekan Coba Kirim Ulang ke Kasir. Foto kamu tetap aman.'
+    );
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, orderPath);
+    console.error('Firestore order create failed:', error);
+    throw toCloudOrderSyncError(error, 'mengirim pesanan');
   }
 
   try {
-    for (let i = 0; i < chunks.length; i++) {
-      await setDoc(doc(db, 'orders', orderId, 'media', `original_${i}`), {
-        kind: 'original',
-        index: i,
-        totalChunks: chunks.length,
-        data: chunks[i],
-        createdAt: serverTimestamp(),
-      });
+    for (let start = 0; start < chunks.length; start += MEDIA_WRITE_CONCURRENCY) {
+      assertDeviceOnline();
+      const batchSlice = chunks.slice(start, start + MEDIA_WRITE_CONCURRENCY);
+      const uploadedSoFar = Math.min(start + batchSlice.length, chunks.length);
+      input.onProgress?.(`Mengunggah foto 4R ke kasir (${uploadedSoFar}/${chunks.length})...`);
+
+      await withTimeout(
+        Promise.all(
+          batchSlice.map((chunkData, offset) => {
+            const idx = start + offset;
+            return setDoc(doc(db, 'orders', orderId, 'media', `original_${idx}`), {
+              kind: 'original',
+              index: idx,
+              totalChunks: chunks.length,
+              data: chunkData,
+              createdAt: serverTimestamp(),
+            });
+          })
+        ),
+        MEDIA_BATCH_TIMEOUT_MS,
+        'Pengunggahan foto ke kasir terputus di tengah jalan. Periksa Wi-Fi lalu tekan Coba Kirim Ulang ke Kasir. Foto kamu tetap aman.'
+      );
     }
 
     const fittedRaws: RawPhotoPayload[] = [];
@@ -297,17 +449,32 @@ export async function createPhotoboothOrder(input: CreateOrderInput): Promise<st
       }
     }
 
-    for (let i = 0; i < fittedRaws.length; i++) {
-      await setDoc(doc(db, 'orders', orderId, 'media', `raw_${i}`), {
-        kind: 'original',
-        index: i,
-        totalChunks: fittedRaws.length,
-        data: fittedRaws[i].dataUrl,
-        createdAt: serverTimestamp(),
-      });
+    for (let start = 0; start < fittedRaws.length; start += MEDIA_WRITE_CONCURRENCY) {
+      assertDeviceOnline();
+      const batchSlice = fittedRaws.slice(start, start + MEDIA_WRITE_CONCURRENCY);
+      const uploadedSoFar = Math.min(start + batchSlice.length, fittedRaws.length);
+      input.onProgress?.(`Mengunggah pose asli (${uploadedSoFar}/${fittedRaws.length})...`);
+
+      await withTimeout(
+        Promise.all(
+          batchSlice.map((item, offset) => {
+            const idx = start + offset;
+            return setDoc(doc(db, 'orders', orderId, 'media', `raw_${idx}`), {
+              kind: 'original',
+              index: idx,
+              totalChunks: fittedRaws.length,
+              data: item.dataUrl,
+              createdAt: serverTimestamp(),
+            });
+          })
+        ),
+        MEDIA_BATCH_TIMEOUT_MS,
+        'Pengunggahan foto pose terputus. Periksa Wi-Fi lalu tekan Coba Kirim Ulang ke Kasir. Foto kamu tetap aman.'
+      );
     }
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `${orderPath}/media`);
+    console.error('Firestore order media upload failed:', error);
+    throw toCloudOrderSyncError(error, 'mengunggah file foto');
   }
 
   return orderId;
