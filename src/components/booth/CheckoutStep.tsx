@@ -293,9 +293,7 @@ export function CheckoutStep({
   // View A: Package Selection, Voucher & Submit to Outside Cashier
   const effectivePkg = selectedPkg || activePkgs[0] || null;
   const effectivePrint = effectivePkg
-    ? effectivePkg.code === 'PHOTO_ONLY'
-      ? wantsPrintOpt
-      : effectivePkg.includesPrint
+    ? effectivePkg.includesPrint || wantsPrintOpt
     : false;
   const printFee = effectivePrint ? settings.printAddonPrice : 0;
   const subtotal = effectivePkg ? effectivePkg.digitalPrice + printFee : 0;
@@ -321,7 +319,7 @@ export function CheckoutStep({
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
             {activePkgs.map((p) => {
               const isSelected = effectivePkg?.id === p.id;
               const pkgBaseTotal =
@@ -357,15 +355,22 @@ export function CheckoutStep({
                     </p>
                   </div>
 
-                  <div className="mt-3 pt-2 border-t border-dashed border-[#3A231E]/25 font-display font-bold text-base text-[#6D1D3A] tabular-nums">
-                    {rupiah(pkgBaseTotal)}
+                  <div className="mt-3 pt-2 border-t border-dashed border-[#3A231E]/25 tabular-nums">
+                    <div className="font-display font-bold text-base text-[#6D1D3A]">
+                      {rupiah(pkgBaseTotal)}
+                    </div>
+                    <div className="text-[11px] text-[#61433B]">
+                      {p.includesPrint
+                        ? 'Sudah termasuk Cetak 4R'
+                        : `+ Cetak 4R: ${rupiah(p.digitalPrice + settings.printAddonPrice)}`}
+                    </div>
                   </div>
                 </motion.button>
               );
             })}
           </div>
 
-          {effectivePkg?.code === 'PHOTO_ONLY' && (
+          {effectivePkg && !effectivePkg.includesPrint && (
             <div className="mb-4">
               <div className="text-xs font-display font-semibold text-[#3A231E] mb-2">
                 Opsi Tambahan Cetak 4R
@@ -378,7 +383,7 @@ export function CheckoutStep({
                     !wantsPrintOpt ? 'whoops-btn-secondary' : 'whoops-btn-ghost'
                   }`}
                 >
-                  Digital Only
+                  Digital Only ({rupiah(effectivePkg.digitalPrice)})
                 </button>
                 <button
                   type="button"
@@ -490,11 +495,9 @@ export function CheckoutStep({
         </div>
 
         <div className="mt-4 bg-[#EFE2CE] border-2 border-[#3A231E] rounded-2xl p-4 text-sm">
-          <div className="flex justify-between mb-1">
-            <span>
-              Layanan Digital {effectivePkg?.includesDoodle ? '+ Custom Doodle' : ''}
-            </span>
-            <b className="tabular-nums">{rupiah(effectivePkg?.digitalPrice || 0)}</b>
+          <div className="flex justify-between mb-1 gap-2">
+            <span className="truncate">{effectivePkg?.name || 'Layanan Digital'}</span>
+            <b className="tabular-nums shrink-0">{rupiah(effectivePkg?.digitalPrice || 0)}</b>
           </div>
           <div className="flex justify-between mb-1">
             <span>Biaya Cetak 4R</span>

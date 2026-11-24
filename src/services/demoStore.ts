@@ -55,14 +55,19 @@ export function loadDemoState(): DemoStoreState {
     const raw = localStorage.getItem(DEMO_STATE_KEY);
     if (!raw) return getInitialDemoState();
     const parsed = JSON.parse(raw) as Partial<DemoStoreState>;
+    const hasCustomCatalog = Boolean(parsed.hasCustomCatalog);
     return {
-      settings: parsed.settings || { ...DEFAULT_STORE_SETTINGS },
-      packages: Array.isArray(parsed.packages) ? parsed.packages : DEFAULT_PACKAGES,
-      frames: Array.isArray(parsed.frames)
+      settings: hasCustomCatalog && parsed.settings
+        ? parsed.settings
+        : { ...DEFAULT_STORE_SETTINGS },
+      packages: hasCustomCatalog && Array.isArray(parsed.packages)
+        ? parsed.packages
+        : DEFAULT_PACKAGES.map((p) => ({ ...p })),
+      frames: hasCustomCatalog && Array.isArray(parsed.frames)
         ? parsed.frames.map((f) => decodeFrameFromFirestore(f))
         : DEFAULT_FRAMES.map((f) => decodeFrameFromFirestore(f)),
       orders: Array.isArray(parsed.orders) ? parsed.orders : [],
-      hasCustomCatalog: Boolean(parsed.hasCustomCatalog),
+      hasCustomCatalog,
     };
   } catch {
     return getInitialDemoState();

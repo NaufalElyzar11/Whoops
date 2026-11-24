@@ -766,8 +766,7 @@ export function BoothFlow({
     setIsSubmittingOrder(true);
     setSubmitStage('Menyiapkan pesanan...');
     setOrderError(null);
-    const effectivePrint =
-      pkgToSubmit.code === 'PHOTO_ONLY' ? wantsPrintOpt : pkgToSubmit.includesPrint;
+    const effectivePrint = pkgToSubmit.includesPrint || wantsPrintOpt;
     const printFee = effectivePrint ? settings.printAddonPrice : 0;
     const subtotal = pkgToSubmit.digitalPrice + printFee;
     const discountAmount = calculateVoucherDiscount(subtotal, appliedVoucher);

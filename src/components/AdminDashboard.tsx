@@ -21,6 +21,7 @@ import {
   Loader2,
   LogIn,
   LogOut,
+  Package,
   PenTool,
   Plus,
   Printer,
@@ -30,9 +31,16 @@ import {
   Search,
   Tag,
   Trash2,
+  X,
 } from 'lucide-react';
 import { getAdminAccessUrl, getBoothBaseUrl } from '../App';
-import { DEFAULT_FRAMES, formatOrderTime, rupiah } from '../constants/defaults';
+import {
+  DEFAULT_FRAMES,
+  DEFAULT_PACKAGES,
+  DEFAULT_STORE_SETTINGS,
+  formatOrderTime,
+  rupiah,
+} from '../constants/defaults';
 import { activeFirebaseConfig, auth, googleProvider } from '../firebase';
 import {
   deleteDemoFrame,
@@ -94,6 +102,10 @@ import type {
   WorkflowStatus,
 } from '../types';
 import {
+  GDRIVE_CONFIG_CODE,
+} from '../utils/gdriveConfigSync';
+import {
+  VOUCHER_CODE_PREFIX,
   formatVoucherBenefit,
   normalizeVoucherCode,
   voucherToPackage,
@@ -214,6 +226,17 @@ export function AdminDashboard({
   const [printAddonDraft, setPrintAddonDraft] = useState<number>(settings.printAddonPrice);
   const [qrisLabelDraft, setQrisLabelDraft] = useState<string>(settings.qrisLabel);
   const [pkgDrafts, setPkgDrafts] = useState<Record<string, ServicePackage>>({});
+  const [showAddPackageForm, setShowAddPackageForm] = useState(false);
+  const [newPkgName, setNewPkgName] = useState('');
+  const [newPkgCode, setNewPkgCode] = useState('');
+  const [newPkgCodeTouched, setNewPkgCodeTouched] = useState(false);
+  const [newPkgPromo, setNewPkgPromo] = useState('');
+  const [newPkgDesc, setNewPkgDesc] = useState('');
+  const [newPkgPrice, setNewPkgPrice] = useState<number>(16000);
+  const [newPkgIncludesDoodle, setNewPkgIncludesDoodle] = useState(false);
+  const [newPkgIncludesPrint, setNewPkgIncludesPrint] = useState(false);
+  const [newPkgSortOrder, setNewPkgSortOrder] = useState<number>(4);
+  const [confirmDeletePkgId, setConfirmDeletePkgId] = useState<string | null>(null);
   const [voucherDrafts, setVoucherDrafts] = useState<Record<string, VoucherCode>>({});
   const [newVoucherCode, setNewVoucherCode] = useState('');
   const [newVoucherType, setNewVoucherType] = useState<DiscountType>('fixed');
@@ -235,10 +258,15 @@ export function AdminDashboard({
 
   useEffect(() => {
     const map: Record<string, ServicePackage> = {};
+    let maxSort = 0;
     packages.forEach((p) => {
       map[p.id] = { ...p };
+      if (p.sortOrder < 900 && p.sortOrder > maxSort) {
+        maxSort = p.sortOrder;
+      }
     });
     setPkgDrafts(map);
+    setNewPkgSortOrder(Math.min(899, Math.max(1, maxSort + 1)));
   }, [packages]);
 
   useEffect(() => {
@@ -934,15 +962,147 @@ export function AdminDashboard({
     }
   };
 
+  const normalizePackageCodeInput = (raw: string): string =>
+    raw
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_')
+      .replace(/[^A-Z0-9_]/g, '')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40);
+
+  const isReservedPackageCode = (code: string): boolean =>
+    !code || code.startsWith(VOUCHER_CODE_PREFIX) || code === GDRIVE_CONFIG_CODE;
+
+  const hasLegacyPricingCatalog = useMemo(() => {
+    const pkg1 = packages.find((p) => p.id === 'pkg-1');
+    const pkg3 = packages.find((p) => p.id === 'pkg-3');
+    return (
+      settings.printAddonPrice === 10000 &&
+      (pkg1?.digitalPrice === 10000 || pkg3?.code === 'PHOTO_DOODLE_PRINT')
+    );
+  }, [packages, settings.printAddonPrice]);
+
+  const handleApplyLatestPricingDefaults = async () => {
+    setSavingId('apply-default-pricing');
+    try {
+      const nextSettings: StoreSettings = {
+        ...settings,
+        printAddonPrice: DEFAULT_STORE_SETTINGS.printAddonPrice,
+      };
+      await persistSettings(nextSettings);
+      for (const defPkg of DEFAULT_PACKAGES) {
+        await persistPackage({ ...defPkg });
+      }
+      showToast('Daftar harga terbaru (16rb / 21rb / 26rb + Cetak 4R Rp 5rb) diterapkan!');
+    } catch {
+      showToast('Gagal menerapkan daftar harga terbaru.');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   const handleSavePackage = async (pkgId: string) => {
     const draft = pkgDrafts[pkgId];
     if (!draft) return;
+    const cleanName = draft.name.trim().slice(0, 80);
+    if (!cleanName) {
+      showToast('Nama paket tidak boleh kosong.');
+      return;
+    }
+    const cleanCode = normalizePackageCodeInput(draft.code) || 'PAKET';
+    if (isReservedPackageCode(cleanCode)) {
+      showToast('Kode paket tidak boleh diawali VOUCHER_ atau memakai kode sistem.');
+      return;
+    }
+
+    const sanitized: ServicePackage = {
+      ...draft,
+      code: cleanCode,
+      name: cleanName,
+      description: draft.description.trim().slice(0, 300),
+      promoText: draft.promoText.trim().slice(0, 40),
+      digitalPrice: Math.max(0, Math.min(10000000, Math.round(Number(draft.digitalPrice) || 0))),
+      sortOrder: Math.max(0, Math.min(899, Math.round(Number(draft.sortOrder) || 1))),
+    };
+
     setSavingId(pkgId);
     try {
-      await persistPackage(draft);
-      showToast(`Paket "${draft.name}" berhasil diperbarui.`);
+      await persistPackage(sanitized);
+      showToast(`Paket "${sanitized.name}" berhasil diperbarui.`);
     } catch {
-      showToast(`Gagal memperbarui paket "${draft.name}".`);
+      showToast(`Gagal memperbarui paket "${sanitized.name}".`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleCreatePackage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = newPkgName.trim().slice(0, 80);
+    if (!cleanName) {
+      showToast('Masukkan nama paket terlebih dahulu.');
+      return;
+    }
+
+    let cleanCode = normalizePackageCodeInput(newPkgCode || cleanName);
+    if (!cleanCode) cleanCode = `PKG_${Date.now().toString().slice(-4)}`;
+    if (isReservedPackageCode(cleanCode)) {
+      showToast('Kode paket tidak boleh diawali VOUCHER_ atau memakai CONFIG_GDRIVE.');
+      return;
+    }
+    if (packages.some((p) => p.code === cleanCode)) {
+      cleanCode = `${cleanCode.slice(0, 34)}_${packages.length + 1}`;
+    }
+
+    const cleanPrice = Math.max(0, Math.min(10000000, Math.round(Number(newPkgPrice) || 0)));
+    const cleanSort = Math.max(0, Math.min(899, Math.round(Number(newPkgSortOrder) || packages.length + 1)));
+
+    const newPkg: ServicePackage = {
+      id: `pkg-${Date.now()}`,
+      code: cleanCode,
+      name: cleanName,
+      description: newPkgDesc.trim().slice(0, 300),
+      promoText: newPkgPromo.trim().slice(0, 40),
+      digitalPrice: cleanPrice,
+      includesDoodle: newPkgIncludesDoodle,
+      includesPrint: newPkgIncludesPrint,
+      isActive: true,
+      sortOrder: cleanSort,
+    };
+
+    setSavingId('new-package');
+    try {
+      await persistPackage(newPkg);
+      setNewPkgName('');
+      setNewPkgCode('');
+      setNewPkgCodeTouched(false);
+      setNewPkgPromo('');
+      setNewPkgDesc('');
+      setNewPkgPrice(16000);
+      setNewPkgIncludesDoodle(false);
+      setNewPkgIncludesPrint(false);
+      setShowAddPackageForm(false);
+      showToast(`Paket baru "${newPkg.name}" berhasil ditambahkan ke Booth!`);
+    } catch {
+      showToast(`Gagal menambahkan paket "${newPkg.name}".`);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const handleDeletePackage = async (pkg: ServicePackage) => {
+    if (packages.length <= 1) {
+      showToast('Minimal harus tersisa 1 paket di sistem.');
+      return;
+    }
+    setSavingId(pkg.id);
+    try {
+      await persistDeletePackage(pkg.id);
+      setConfirmDeletePkgId(null);
+      showToast(`Paket "${pkg.name}" dihapus.`);
+    } catch {
+      showToast(`Gagal menghapus paket "${pkg.name}".`);
     } finally {
       setSavingId(null);
     }
@@ -2067,142 +2227,519 @@ export function AdminDashboard({
       {/* TAB 4: SERVICE & PACKAGES */}
       {activeTab === 'packages' && (
         <div className="space-y-5">
-          <div className="whoops-card p-5 flex flex-wrap items-end gap-4">
-            <div>
-              <label className="block text-xs font-display font-semibold mb-1">
-                Biaya Tambahan Cetak 4R (Rp)
-              </label>
-              <input
-                type="number"
-                value={printAddonDraft}
-                onChange={(e) => setPrintAddonDraft(Number(e.target.value))}
-                className="w-48 border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white tabular-nums"
-              />
+          {hasLegacyPricingCatalog && (
+            <div className="whoops-card-sm p-4 bg-amber-100 border-2 border-[#3A231E] flex flex-wrap items-center justify-between gap-3">
+              <div className="text-xs text-[#3A231E] space-y-0.5">
+                <div className="font-display font-bold text-sm text-[#6D1D3A]">
+                  Daftar Harga Lama Terdeteksi di Cloud
+                </div>
+                <p>
+                  Database masih memakai harga lama. Klik tombol di samping untuk memperbarui ke harga terbaru:
+                  Foto Biasa <b>Rp 16rb</b> (+cetak <b>Rp 21rb</b>), Doodle Tanpa Coloring <b>Rp 21rb</b> (+cetak <b>Rp 26rb</b>), Doodle Coloring <b>Rp 26rb</b> (+cetak <b>Rp 31rb</b>).
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={savingId === 'apply-default-pricing'}
+                onClick={() => void handleApplyLatestPricingDefaults()}
+                className="whoops-btn whoops-btn-primary px-4 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>
+                  {savingId === 'apply-default-pricing'
+                    ? 'Menerapkan...'
+                    : 'Terapkan Harga Terbaru'}
+                </span>
+              </button>
             </div>
-            <div className="flex-1 min-w-[200px]">
-              <label className="block text-xs font-display font-semibold mb-1">
-                Label QRIS Merchant
-              </label>
-              <input
-                type="text"
-                value={qrisLabelDraft}
-                onChange={(e) => setQrisLabelDraft(e.target.value)}
-                className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white"
-              />
+          )}
+
+          {/* Basic Pricing & QRIS Settings */}
+          <div className="whoops-card p-5">
+            <div className="flex flex-col md:flex-row md:items-end gap-4">
+              <div className="w-full md:w-56">
+                <label
+                  htmlFor="setting-print-addon"
+                  className="block text-xs font-display font-semibold mb-1"
+                >
+                  Biaya Tambahan Cetak 4R (Rp)
+                </label>
+                <input
+                  id="setting-print-addon"
+                  type="number"
+                  min={0}
+                  max={10000000}
+                  value={printAddonDraft}
+                  onChange={(e) => setPrintAddonDraft(Number(e.target.value))}
+                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white tabular-nums"
+                />
+              </div>
+              <div className="flex-1 min-w-0">
+                <label
+                  htmlFor="setting-qris-label"
+                  className="block text-xs font-display font-semibold mb-1"
+                >
+                  Label QRIS Merchant
+                </label>
+                <input
+                  id="setting-qris-label"
+                  type="text"
+                  maxLength={120}
+                  value={qrisLabelDraft}
+                  onChange={(e) => setQrisLabelDraft(e.target.value)}
+                  className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveSettings}
+                disabled={savingId === 'settings'}
+                className="whoops-btn whoops-btn-primary px-5 py-2.5 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+              >
+                <Save className="w-3.5 h-3.5" aria-hidden="true" />
+                <span>{savingId === 'settings' ? 'Menyimpan...' : 'Simpan Pengaturan'}</span>
+              </button>
             </div>
-            <button
-              onClick={handleSaveSettings}
-              disabled={savingId === 'settings'}
-              className="whoops-btn whoops-btn-primary px-5 py-2.5 text-xs inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <Save className="w-3.5 h-3.5" />
-              Simpan Pengaturan
-            </button>
+            <p className="text-[11px] text-[#61433B] mt-2.5">
+              Biaya tambahan cetak ({rupiah(printAddonDraft)}) otomatis ditambahkan jika pelanggan memilih opsi <b>+ Cetak 4R</b> di Booth atau pada paket yang mencentang <b>Sudah Termasuk Cetak 4R</b>.
+            </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {packages.map((p) => {
-              const draft = pkgDrafts[p.id] || p;
-              return (
-                <div key={p.id} className="whoops-card p-5 flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono-tabular text-xs font-bold text-[#61433B]">
-                      {draft.code}
-                    </span>
-                    <label className="text-xs font-display font-semibold inline-flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={draft.isActive}
-                        onChange={(e) =>
-                          setPkgDrafts((prev) => ({
-                            ...prev,
-                            [p.id]: { ...draft, isActive: e.target.checked },
-                          }))
-                        }
-                        className="accent-[#6D1D3A]"
-                      />
-                      Aktif
-                    </label>
-                  </div>
+          {/* Packages List + Add Package Form */}
+          <div className="whoops-card p-5 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="inline-flex items-center gap-1.5 text-xs font-display font-bold text-[#6D1D3A] mb-1">
+                  <Package className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>PAKET LAYANAN BOOTH ({packages.length})</span>
+                </div>
+                <h3 className="font-display font-bold text-lg text-[#3A231E]">
+                  Kelola Pilihan Paket &amp; Harga
+                </h3>
+                <p className="text-xs text-[#61433B]">
+                  Tambah, ubah harga, atau nonaktifkan paket yang tampil di layar Checkout Booth.
+                </p>
+              </div>
 
-                  <div>
-                    <label className="block text-[11px] font-display font-semibold mb-1">
+              <button
+                type="button"
+                onClick={() => setShowAddPackageForm((prev) => !prev)}
+                className={`whoops-btn px-4 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  showAddPackageForm ? 'whoops-btn-ghost' : 'whoops-btn-primary'
+                }`}
+              >
+                {showAddPackageForm ? (
+                  <>
+                    <X className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Tutup Form</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Tambah Paket Baru</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {showAddPackageForm && (
+              <form
+                onSubmit={handleCreatePackage}
+                className="bg-[#EFE2CE]/70 border-2 border-[#3A231E] rounded-2xl p-4 sm:p-5 space-y-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="font-display font-bold text-sm text-[#3A231E]">
+                    Buat Paket Baru
+                  </h4>
+                  <span className="text-[11px] font-display font-semibold text-[#6D1D3A] tabular-nums">
+                    {newPkgIncludesPrint
+                      ? `Total di Booth (+ Cetak 4R): ${rupiah((Number(newPkgPrice) || 0) + (Number(settings.printAddonPrice) || 0))}`
+                      : `Digital: ${rupiah(newPkgPrice)} | + Cetak 4R: ${rupiah((Number(newPkgPrice) || 0) + (Number(settings.printAddonPrice) || 0))}`}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
+                  <div className="lg:col-span-4">
+                    <label
+                      htmlFor="new-pkg-name"
+                      className="block text-[11px] font-display font-semibold mb-1"
+                    >
                       Nama Paket
                     </label>
                     <input
-                      value={draft.name}
-                      onChange={(e) =>
-                        setPkgDrafts((prev) => ({
-                          ...prev,
-                          [p.id]: { ...draft, name: e.target.value },
-                        }))
-                      }
-                      className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white"
+                      id="new-pkg-name"
+                      required
+                      maxLength={80}
+                      value={newPkgName}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setNewPkgName(val);
+                        if (!newPkgCodeTouched) {
+                          setNewPkgCode(normalizePackageCodeInput(val));
+                        }
+                      }}
+                      placeholder="Misal: PHOTO + DOODLE COLORING"
+                      className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-display font-semibold mb-1">
-                      Label Promo (Opsional)
+                  <div className="lg:col-span-3">
+                    <label
+                      htmlFor="new-pkg-code"
+                      className="block text-[11px] font-display font-semibold mb-1"
+                    >
+                      Kode Paket (A-Z, 0-9, _)
                     </label>
                     <input
-                      value={draft.promoText}
-                      placeholder="Misal: BEST VALUE"
-                      onChange={(e) =>
-                        setPkgDrafts((prev) => ({
-                          ...prev,
-                          [p.id]: { ...draft, promoText: e.target.value },
-                        }))
-                      }
-                      className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white"
+                      id="new-pkg-code"
+                      maxLength={40}
+                      value={newPkgCode}
+                      onChange={(e) => {
+                        setNewPkgCodeTouched(true);
+                        setNewPkgCode(normalizePackageCodeInput(e.target.value));
+                      }}
+                      placeholder="Otomatis dari nama"
+                      className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white font-mono-tabular uppercase"
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-display font-semibold mb-1">
-                      Deskripsi
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={draft.description}
-                      onChange={(e) =>
-                        setPkgDrafts((prev) => ({
-                          ...prev,
-                          [p.id]: { ...draft, description: e.target.value },
-                        }))
-                      }
-                      className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-display font-semibold mb-1">
+                  <div className="lg:col-span-2">
+                    <label
+                      htmlFor="new-pkg-price"
+                      className="block text-[11px] font-display font-semibold mb-1"
+                    >
                       Harga Digital (Rp)
                     </label>
                     <input
+                      id="new-pkg-price"
                       type="number"
-                      value={draft.digitalPrice}
-                      onChange={(e) =>
-                        setPkgDrafts((prev) => ({
-                          ...prev,
-                          [p.id]: { ...draft, digitalPrice: Number(e.target.value) },
-                        }))
-                      }
-                      className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white tabular-nums"
+                      min={0}
+                      max={10000000}
+                      required
+                      value={newPkgPrice}
+                      onChange={(e) => setNewPkgPrice(Number(e.target.value))}
+                      className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white tabular-nums"
                     />
                   </div>
 
-                  <button
-                    onClick={() => handleSavePackage(p.id)}
-                    disabled={savingId === p.id}
-                    className="whoops-btn whoops-btn-secondary w-full py-2 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer mt-1"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    {savingId === p.id ? 'Menyimpan...' : 'Simpan Paket'}
-                  </button>
+                  <div className="lg:col-span-2">
+                    <label
+                      htmlFor="new-pkg-promo"
+                      className="block text-[11px] font-display font-semibold mb-1"
+                    >
+                      Label Promo (Opsional)
+                    </label>
+                    <input
+                      id="new-pkg-promo"
+                      maxLength={40}
+                      value={newPkgPromo}
+                      onChange={(e) => setNewPkgPromo(e.target.value)}
+                      placeholder="Misal: FULL COLOR"
+                      className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+
+                  <div className="lg:col-span-1">
+                    <label
+                      htmlFor="new-pkg-sort"
+                      className="block text-[11px] font-display font-semibold mb-1"
+                    >
+                      Urutan
+                    </label>
+                    <input
+                      id="new-pkg-sort"
+                      type="number"
+                      min={0}
+                      max={899}
+                      value={newPkgSortOrder}
+                      onChange={(e) => setNewPkgSortOrder(Number(e.target.value))}
+                      className="w-full border-2 border-[#3A231E] rounded-xl px-2.5 py-2 text-sm bg-white tabular-nums"
+                    />
+                  </div>
                 </div>
-              );
-            })}
+
+                <div>
+                  <label
+                    htmlFor="new-pkg-desc"
+                    className="block text-[11px] font-display font-semibold mb-1"
+                  >
+                    Deskripsi Paket (tampil di kartu Booth)
+                  </label>
+                  <input
+                    id="new-pkg-desc"
+                    maxLength={300}
+                    value={newPkgDesc}
+                    onChange={(e) => setNewPkgDesc(e.target.value)}
+                    placeholder="Misal: Foto photobooth + doodle full color. Bisa tambah cetak 4R."
+                    className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                  <div className="flex flex-wrap items-center gap-4 text-xs font-display font-semibold text-[#3A231E]">
+                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newPkgIncludesDoodle}
+                        onChange={(e) => setNewPkgIncludesDoodle(e.target.checked)}
+                        className="accent-[#6D1D3A] w-4 h-4"
+                      />
+                      <span>Termasuk Jasa Doodle</span>
+                    </label>
+
+                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newPkgIncludesPrint}
+                        onChange={(e) => setNewPkgIncludesPrint(e.target.checked)}
+                        className="accent-[#6D1D3A] w-4 h-4"
+                      />
+                      <span>Sudah Termasuk Cetak 4R (wajib cetak)</span>
+                    </label>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddPackageForm(false)}
+                      className="whoops-btn whoops-btn-ghost px-4 py-2 text-xs cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingId === 'new-package'}
+                      className="whoops-btn whoops-btn-primary px-5 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>
+                        {savingId === 'new-package' ? 'Menyimpan...' : 'Simpan Paket Baru'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </form>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {packages.map((p) => {
+                const draft = pkgDrafts[p.id] || p;
+                const confirmDel = confirmDeletePkgId === p.id;
+                const printFeePreview = Number(settings.printAddonPrice) || 0;
+                const baseDigital = Math.max(0, Number(draft.digitalPrice) || 0);
+                const withPrintTotal = baseDigital + printFeePreview;
+
+                return (
+                  <div
+                    key={p.id}
+                    className={`whoops-card-sm p-4 flex flex-col justify-between gap-3 transition-opacity ${
+                      draft.isActive ? 'bg-[#FDF7EE]' : 'bg-[#EFE2CE]/60 opacity-80'
+                    }`}
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="px-2 py-0.5 rounded-md bg-[#EFE2CE] border border-[#3A231E]/40 font-mono-tabular text-[11px] font-bold text-[#3A231E] truncate">
+                          {draft.code}
+                        </span>
+                        <label className="text-xs font-display font-semibold inline-flex items-center gap-1.5 cursor-pointer shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={draft.isActive}
+                            onChange={(e) =>
+                              setPkgDrafts((prev) => ({
+                                ...prev,
+                                [p.id]: { ...draft, isActive: e.target.checked },
+                              }))
+                            }
+                            className="accent-[#6D1D3A] w-4 h-4"
+                          />
+                          <span>{draft.isActive ? 'Aktif' : 'Nonaktif'}</span>
+                        </label>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-display font-semibold mb-1">
+                          Nama Paket
+                        </label>
+                        <input
+                          maxLength={80}
+                          value={draft.name}
+                          onChange={(e) =>
+                            setPkgDrafts((prev) => ({
+                              ...prev,
+                              [p.id]: { ...draft, name: e.target.value },
+                            }))
+                          }
+                          className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white font-display font-semibold"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="col-span-2">
+                          <label className="block text-[11px] font-display font-semibold mb-1">
+                            Label Promo (Opsional)
+                          </label>
+                          <input
+                            maxLength={40}
+                            value={draft.promoText}
+                            placeholder="Misal: FULL COLOR"
+                            onChange={(e) =>
+                              setPkgDrafts((prev) => ({
+                                ...prev,
+                                [p.id]: { ...draft, promoText: e.target.value },
+                              }))
+                            }
+                            className="w-full border-2 border-[#3A231E] rounded-xl px-2.5 py-1.5 text-xs bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-display font-semibold mb-1">
+                            Urutan
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={899}
+                            value={draft.sortOrder}
+                            onChange={(e) =>
+                              setPkgDrafts((prev) => ({
+                                ...prev,
+                                [p.id]: { ...draft, sortOrder: Number(e.target.value) },
+                              }))
+                            }
+                            className="w-full border-2 border-[#3A231E] rounded-xl px-2.5 py-1.5 text-xs bg-white tabular-nums"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-display font-semibold mb-1">
+                          Deskripsi
+                        </label>
+                        <textarea
+                          rows={2}
+                          maxLength={300}
+                          value={draft.description}
+                          onChange={(e) =>
+                            setPkgDrafts((prev) => ({
+                              ...prev,
+                              [p.id]: { ...draft, description: e.target.value },
+                            }))
+                          }
+                          className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-xs bg-white leading-snug"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-display font-semibold mb-1">
+                          Harga Digital (Rp)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={10000000}
+                          value={draft.digitalPrice}
+                          onChange={(e) =>
+                            setPkgDrafts((prev) => ({
+                              ...prev,
+                              [p.id]: { ...draft, digitalPrice: Number(e.target.value) },
+                            }))
+                          }
+                          className="w-full border-2 border-[#3A231E] rounded-xl px-3 py-1.5 text-sm bg-white tabular-nums font-semibold"
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs font-display font-semibold text-[#3A231E]">
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={draft.includesDoodle}
+                            onChange={(e) =>
+                              setPkgDrafts((prev) => ({
+                                ...prev,
+                                [p.id]: { ...draft, includesDoodle: e.target.checked },
+                              }))
+                            }
+                            className="accent-[#6D1D3A] w-4 h-4"
+                          />
+                          <span>Pakai Doodle</span>
+                        </label>
+
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={draft.includesPrint}
+                            onChange={(e) =>
+                              setPkgDrafts((prev) => ({
+                                ...prev,
+                                [p.id]: { ...draft, includesPrint: e.target.checked },
+                              }))
+                            }
+                            className="accent-[#6D1D3A] w-4 h-4"
+                          />
+                          <span>Wajib Cetak 4R</span>
+                        </label>
+                      </div>
+
+                      <div className="px-3 py-2 rounded-xl bg-[#EFE2CE] border border-[#3A231E]/30 text-[11px] text-[#3A231E] flex flex-wrap items-center justify-between gap-1 tabular-nums">
+                        {draft.includesPrint ? (
+                          <>
+                            <span>Harga Tampil (+ Cetak 4R):</span>
+                            <b className="text-[#6D1D3A]">{rupiah(withPrintTotal)}</b>
+                          </>
+                        ) : (
+                          <>
+                            <span>
+                              Digital: <b className="text-[#6D1D3A]">{rupiah(baseDigital)}</b>
+                            </span>
+                            <span>
+                              + Cetak 4R: <b className="text-[#6D1D3A]">{rupiah(withPrintTotal)}</b>
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => void handleSavePackage(p.id)}
+                        disabled={savingId === p.id}
+                        className="whoops-btn whoops-btn-secondary flex-1 py-2 text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Save className="w-3.5 h-3.5" aria-hidden="true" />
+                        <span>{savingId === p.id ? 'Menyimpan...' : 'Simpan Paket'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={savingId === p.id || packages.length <= 1}
+                        onClick={() => {
+                          if (!confirmDel) {
+                            setConfirmDeletePkgId(p.id);
+                            window.setTimeout(() => setConfirmDeletePkgId(null), 3200);
+                          } else {
+                            void handleDeletePackage(p);
+                          }
+                        }}
+                        className={`whoops-btn whoops-btn-compact px-3 py-2 text-xs inline-flex items-center gap-1 cursor-pointer ${
+                          confirmDel ? 'whoops-btn-primary' : 'whoops-btn-ghost text-[#6D1D3A]'
+                        }`}
+                        aria-label={`Hapus paket ${draft.name}`}
+                        title={
+                          packages.length <= 1
+                            ? 'Minimal harus tersisa 1 paket'
+                            : `Hapus paket ${draft.name}`
+                        }
+                      >
+                        <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                        {confirmDel && <span>Yakin?</span>}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
           {/* Voucher Discount Management */}
