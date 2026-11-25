@@ -15,6 +15,8 @@ import type { CapturedPhoto } from '../../types';
 
 const SHOW_DEMO_POSE_CONTROLS = false;
 
+export type CameraLensMode = 'normal' | 'wide';
+
 export interface RetakeTarget {
   photoId: string;
   slotNumber?: number;
@@ -29,6 +31,9 @@ interface CameraStepProps {
   setMirrorPreview: (updater: (v: boolean) => boolean) => void;
   saveMirrored: boolean;
   setSaveMirrored: (updater: (v: boolean) => boolean) => void;
+  cameraLensMode: CameraLensMode;
+  onChangeCameraLensMode: (mode: CameraLensMode) => void;
+  previewZoom: number;
   countdownVal: number | null;
   shutterFlash: boolean;
   camStatusMsg: string;
@@ -57,6 +62,9 @@ export function CameraStep({
   setMirrorPreview,
   saveMirrored,
   setSaveMirrored,
+  cameraLensMode,
+  onChangeCameraLensMode,
+  previewZoom,
   countdownVal,
   shutterFlash,
   camStatusMsg,
@@ -153,8 +161,10 @@ export function CameraStep({
             autoPlay
             playsInline
             muted
-            className="w-full h-full object-cover"
-            style={{ transform: mirrorPreview ? 'scaleX(-1)' : 'none' }}
+            className="w-full h-full object-cover transition-transform duration-200 ease-out"
+            style={{
+              transform: `${mirrorPreview ? 'scaleX(-1) ' : ''}scale(${previewZoom})`,
+            }}
           />
 
           {/* Retro Studio Viewfinder L-Brackets */}
@@ -318,6 +328,34 @@ export function CameraStep({
         {/* Camera Controls: Fixed-width mirror toggles + dedicated shutter action row */}
         <div className="space-y-2.5">
           <div className="flex flex-wrap items-center gap-2">
+            <div
+              role="group"
+              aria-label="Pilih sudut lensa kamera"
+              className="inline-flex items-center rounded-xl border-2 border-[#3A231E] bg-[#EFE2CE] p-0.5 shadow-[2px_2px_0_#3A231E]"
+            >
+              <button
+                type="button"
+                onClick={() => onChangeCameraLensMode('normal')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-display font-bold cursor-pointer min-h-[34px] transition-colors ${
+                  cameraLensMode === 'normal'
+                    ? 'bg-[#6D1D3A] text-[#FDF7EE]'
+                    : 'text-[#3A231E] hover:bg-[#FDF7EE]/60'
+                }`}
+              >
+                Normal (1x)
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeCameraLensMode('wide')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-display font-bold cursor-pointer min-h-[34px] transition-colors ${
+                  cameraLensMode === 'wide'
+                    ? 'bg-[#6D1D3A] text-[#FDF7EE]'
+                    : 'text-[#3A231E] hover:bg-[#FDF7EE]/60'
+                }`}
+              >
+                Wide (0.5x)
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => setMirrorPreview((v) => !v)}

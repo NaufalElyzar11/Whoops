@@ -42,7 +42,7 @@ import {
   calculateVoucherDiscount,
   normalizeVoucherCode,
 } from '../utils/voucher';
-import { CameraStep, type RetakeTarget } from './booth/CameraStep';
+import { CameraStep, type CameraLensMode, type RetakeTarget } from './booth/CameraStep';
 import { CheckoutStep } from './booth/CheckoutStep';
 import { EditorStep } from './booth/EditorStep';
 import { FrameStep } from './booth/FrameStep';
@@ -84,6 +84,37 @@ interface BgUploadTracker {
   folderReadyPromise: Promise<{ folderId: string; folderUrl: string } | null>;
 }
 
+const NORMAL_SOFTWARE_ZOOM = 1.45;
+
+interface ZoomCapableTrackCapabilities extends MediaTrackCapabilities {
+  zoom?: { min?: number; max?: number; step?: number };
+}
+
+function classifyFrontCameraDevices(devices: MediaDeviceInfo[]): {
+  normalId: string | null;
+  wideId: string | null;
+} {
+  const videos = devices.filter((d) => d.kind === 'videoinput' && d.deviceId);
+  const frontish = videos.filter((d) => {
+    const label = d.label.toLowerCase();
+    return (
+      !label.includes('back') &&
+      !label.includes('rear') &&
+      !label.includes('environment')
+    );
+  });
+  const pool = frontish.length > 0 ? frontish : videos;
+  const isUltraWide = (label: string) => /ultra\s*-?\s*wide|0\.5x/i.test(label);
+
+  const wideDev = pool.find((d) => isUltraWide(d.label)) || null;
+  const normalDev = pool.find((d) => !isUltraWide(d.label)) || null;
+
+  return {
+    normalId: normalDev?.deviceId || null,
+    wideId: wideDev?.deviceId || null,
+  };
+}
+
 const createInitialAssignments = (slotCount = 6): SlotAssignment[] =>
   Array.from({ length: slotCount }, (_, i) => ({
     slotIndex: i,
@@ -121,6 +152,8 @@ export function BoothFlow({
 
   const [mirrorPreview, setMirrorPreview] = useState(true);
   const [saveMirrored, setSaveMirrored] = useState(true);
+  const [cameraLensMode, setCameraLensMode] = useState<CameraLensMode>('normal');
+  const [softwareZoom, setSoftwareZoom] = useState<number>(NORMAL_SOFTWARE_ZOOM);
   const [camStatusMsg, setCamStatusMsg] = useState('Memuat kamera...');
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -157,6 +190,16 @@ export function BoothFlow({
   const bgTrackerRef = useRef<BgUploadTracker | null>(null);
   const bgTrackerSeqRef = useRef(0);
   const failedCloudOrderIdsRef = useRef<Set<string>>(new Set());
+  const softwareZoomRef = useRef<number>(NORMAL_SOFTWARE_ZOOM);
+  const cameraDevicesRef = useRef<{ normalId: string | null; wideId: string | null }>({
+    normalId: null,
+    wideId: null,
+  });
+  const activeCameraDeviceIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    softwareZoomRef.current = softwareZoom;
+  }, [softwareZoom]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -209,6 +252,50 @@ export function BoothFlow({
     setCameraReady(false);
   }, [clearCountdownTimer]);
 
+  const applyLensModeToStream = useCallback(
+    async (stream: MediaStream, mode: CameraLensMode, hasDistinctPhysicalLens: boolean) => {
+      if (hasDistinctPhysicalLens) {
+        setSoftwareZoom(1);
+        return;
+      }
+
+      const track = stream.getVideoTracks()[0];
+      const caps =
+        track && typeof track.getCapabilities === 'function'
+          ? (track.getCapabilities() as ZoomCapableTrackCapabilities)
+          : null;
+
+      if (
+        track &&
+        caps?.zoom &&
+        typeof caps.zoom.min === 'number' &&
+        typeof caps.zoom.max === 'number' &&
+        caps.zoom.max > caps.zoom.min
+      ) {
+        const minZ = caps.zoom.min;
+        const maxZ = caps.zoom.max;
+        const targetZoom =
+          mode === 'wide'
+            ? minZ
+            : minZ < 1
+              ? Math.min(maxZ, 1)
+              : Math.min(maxZ, NORMAL_SOFTWARE_ZOOM);
+        try {
+          await track.applyConstraints({
+            advanced: [{ zoom: targetZoom } as MediaTrackConstraintSet],
+          });
+          setSoftwareZoom(1);
+          return;
+        } catch {
+          // Fall back to crisp optical center-crop if hardware zoom constraint is rejected
+        }
+      }
+
+      setSoftwareZoom(mode === 'wide' ? 1 : NORMAL_SOFTWARE_ZOOM);
+    },
+    []
+  );
+
   // Manage camera stream lifecycle cleanly on camera step and timeout
   useEffect(() => {
     if (step !== 'camera' || isSessionExpired) {
@@ -219,6 +306,23 @@ export function BoothFlow({
     let cancelled = false;
     setCameraError(null);
     setCameraReady(false);
+
+    const openUserStream = async (preferredDeviceId?: string | null): Promise<MediaStream> => {
+      const baseConstraint: MediaTrackConstraints = preferredDeviceId
+        ? { deviceId: { exact: preferredDeviceId } }
+        : { facingMode: 'user' };
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          video: { ...baseConstraint, width: { ideal: 1920 }, height: { ideal: 1440 } },
+          audio: false,
+        });
+      } catch {
+        return await navigator.mediaDevices.getUserMedia({
+          video: { ...baseConstraint, width: { ideal: 1280 }, height: { ideal: 960 } },
+          audio: false,
+        });
+      }
+    };
 
     const initCamera = async () => {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -231,22 +335,76 @@ export function BoothFlow({
 
       try {
         stopCamera();
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 960 } },
-          audio: false,
-        });
+        const known = cameraDevicesRef.current;
+        const knownDistinct = Boolean(
+          known.normalId && known.wideId && known.normalId !== known.wideId
+        );
+        const preferredId = knownDistinct
+          ? cameraLensMode === 'wide'
+            ? known.wideId
+            : known.normalId
+          : null;
+
+        let stream = await openUserStream(preferredId);
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
+
+        let hasDistinctPhysicalLens = knownDistinct;
+        if (navigator.mediaDevices.enumerateDevices) {
+          try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const classified = classifyFrontCameraDevices(devices);
+            cameraDevicesRef.current = classified;
+            hasDistinctPhysicalLens = Boolean(
+              classified.normalId &&
+                classified.wideId &&
+                classified.normalId !== classified.wideId
+            );
+
+            const activeTrackDeviceId =
+              stream.getVideoTracks()[0]?.getSettings?.().deviceId || null;
+            const desiredId =
+              cameraLensMode === 'wide' ? classified.wideId : classified.normalId;
+
+            if (
+              hasDistinctPhysicalLens &&
+              desiredId &&
+              activeTrackDeviceId &&
+              desiredId !== activeTrackDeviceId
+            ) {
+              stream.getTracks().forEach((t) => t.stop());
+              stream = await openUserStream(desiredId);
+              if (cancelled) {
+                stream.getTracks().forEach((t) => t.stop());
+                return;
+              }
+            }
+          } catch {
+            // Keep initial stream if enumerateDevices is restricted
+          }
+        }
+
         streamRef.current = stream;
+        activeCameraDeviceIdRef.current =
+          stream.getVideoTracks()[0]?.getSettings?.().deviceId || null;
+
+        await applyLensModeToStream(stream, cameraLensMode, hasDistinctPhysicalLens);
+        if (cancelled) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
         }
         setCameraReady(true);
         setCameraError(null);
-        setCamStatusMsg('Kamera aktif (rasio sudah pas slot frame). Tekan CAPTURE (3s) untuk memotret.');
+        setCamStatusMsg(
+          'Kamera aktif (rasio sudah pas slot frame). Pilih lensa Normal (1x) atau Wide (0.5x), lalu tekan CAPTURE (3s).'
+        );
       } catch {
         if (cancelled) return;
         const msg =
@@ -262,7 +420,35 @@ export function BoothFlow({
       cancelled = true;
       stopCamera();
     };
-  }, [step, isSessionExpired, cameraRetryTick, stopCamera]);
+  }, [step, isSessionExpired, cameraRetryTick, stopCamera, applyLensModeToStream]);
+
+  const handleChangeCameraLensMode = useCallback(
+    (nextMode: CameraLensMode) => {
+      setCameraLensMode(nextMode);
+      const stream = streamRef.current;
+      if (!stream) return;
+
+      const classified = cameraDevicesRef.current;
+      const hasDistinctPhysicalLens = Boolean(
+        classified.normalId &&
+          classified.wideId &&
+          classified.normalId !== classified.wideId
+      );
+      const desiredId = nextMode === 'wide' ? classified.wideId : classified.normalId;
+
+      if (
+        hasDistinctPhysicalLens &&
+        desiredId &&
+        desiredId !== activeCameraDeviceIdRef.current
+      ) {
+        setCameraRetryTick((n) => n + 1);
+        return;
+      }
+
+      void applyLensModeToStream(stream, nextMode, hasDistinctPhysicalLens);
+    },
+    [applyLensModeToStream]
+  );
 
   // Keep ticket order status synced from both local Demo Store and Cloud Firestore
   useEffect(() => {
@@ -597,7 +783,12 @@ export function BoothFlow({
         setShutterFlash(true);
         window.setTimeout(() => setShutterFlash(false), 220);
 
-        const dataUrl = captureVideoSlotFrame(video, saveMirrored, slotAspectRatio);
+        const dataUrl = captureVideoSlotFrame(
+          video,
+          saveMirrored,
+          slotAspectRatio,
+          softwareZoomRef.current
+        );
         if (dataUrl) {
           commitCapturedDataUrl(dataUrl);
         }
@@ -977,6 +1168,9 @@ export function BoothFlow({
           setMirrorPreview={setMirrorPreview}
           saveMirrored={saveMirrored}
           setSaveMirrored={setSaveMirrored}
+          cameraLensMode={cameraLensMode}
+          onChangeCameraLensMode={handleChangeCameraLensMode}
+          previewZoom={softwareZoom}
           countdownVal={countdownVal}
           shutterFlash={shutterFlash}
           camStatusMsg={camStatusMsg}

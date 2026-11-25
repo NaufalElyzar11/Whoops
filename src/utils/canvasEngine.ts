@@ -247,14 +247,21 @@ function getCoverCropRect(srcW: number, srcH: number, targetRatio: number) {
   return { sx, sy, sw, sh };
 }
 
-/** Center-crops a live <video> frame to match the 4R slot aspect ratio so preview and print match 1:1. */
+/** Center-crops a live <video> frame to match the 4R slot aspect ratio (and optional digital lens zoom) so preview and print match 1:1. */
 export function captureVideoSlotFrame(
   video: HTMLVideoElement,
   mirrored: boolean,
-  targetRatio = SLOT_ASPECT_RATIO
+  targetRatio = SLOT_ASPECT_RATIO,
+  digitalZoom = 1
 ): string {
   if (video.videoWidth <= 0 || video.videoHeight <= 0) return '';
-  const { sx, sy, sw, sh } = getCoverCropRect(video.videoWidth, video.videoHeight, targetRatio);
+  const safeZoom = Math.max(1, Math.min(3, Number(digitalZoom) || 1));
+  const base = getCoverCropRect(video.videoWidth, video.videoHeight, targetRatio);
+  const sw = base.sw / safeZoom;
+  const sh = base.sh / safeZoom;
+  const sx = base.sx + (base.sw - sw) / 2;
+  const sy = base.sy + (base.sh - sh) / 2;
+
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(sw));
   c.height = Math.max(1, Math.round(sh));
