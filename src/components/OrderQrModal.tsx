@@ -23,6 +23,7 @@ interface OrderQrModalProps {
   gdriveError: string | null;
   gdriveWarning?: string | null;
   onUploadToGdrive: (order: PhotoboothOrder) => void;
+  onOpenGdriveSettings?: () => void;
   onClose: () => void;
 }
 
@@ -34,9 +35,16 @@ export function OrderQrModal({
   gdriveError,
   gdriveWarning,
   onUploadToGdrive,
+  onOpenGdriveSettings,
   onClose,
 }: OrderQrModalProps) {
   const [copiedLink, setCopiedLink] = useState(false);
+  const [showFallbackQr, setShowFallbackQr] = useState(false);
+
+  useEffect(() => {
+    setShowFallbackQr(false);
+    setCopiedLink(false);
+  }, [order.id]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -51,6 +59,7 @@ export function OrderQrModal({
   const fallbackDownloadUrl = `${window.location.origin}${import.meta.env.BASE_URL}?download=${encodeURIComponent(order.id)}`;
   const qrTargetUrl = hasGdriveFolder ? gdriveFolderUrl : fallbackDownloadUrl;
   const hasAppsScriptUrl = Boolean(gdriveConfig.webAppUrl.trim());
+  const blockFallbackUntilGdriveReady = hasAppsScriptUrl && !hasGdriveFolder && !showFallbackQr;
 
   return (
     <div
@@ -105,11 +114,36 @@ export function OrderQrModal({
                 <div className="font-display font-bold text-sm text-[#3A231E] tabular-nums">
                   {gdriveProgress && gdriveProgress.totalFiles > 0
                     ? `Mengupload ${Math.min(gdriveProgress.uploadedFiles + 1, gdriveProgress.totalFiles)}/${gdriveProgress.totalFiles} file ke Google Drive...`
-                    : 'Mengupload Foto Mentah + 4R ke Google Drive...'}
+                    : 'Menyiapkan Folder Google Drive & QR...'}
                 </div>
                 <p className="text-[11px] text-[#61433B] leading-relaxed">
-                  QR Code langsung ke folder Google Drive akan muncul begitu upload selesai.
+                  QR Code langsung ke folder Google Drive akan muncul otomatis begitu upload selesai.
                 </p>
+              </div>
+            ) : blockFallbackUntilGdriveReady ? (
+              <div className="py-8 px-4 flex flex-col items-center text-center gap-3">
+                <CloudUpload className="w-9 h-9 text-[#6D1D3A]" aria-hidden="true" />
+                <div className="font-display font-bold text-sm text-[#3A231E]">
+                  Link Google Drive Belum Siap
+                </div>
+                <p className="text-[11px] text-[#61433B] leading-relaxed">
+                  Tekan tombol di bawah agar foto mentah &amp; 4R diupload otomatis dan QR langsung mengarah ke Google Drive.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onUploadToGdrive(order)}
+                  className="whoops-btn whoops-btn-primary px-4 py-2 text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <CloudUpload className="w-4 h-4" aria-hidden="true" />
+                  <span>Coba Upload ke GDrive &amp; Buat QR</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowFallbackQr(true)}
+                  className="text-[11px] underline text-[#61433B] hover:text-[#3A231E] cursor-pointer"
+                >
+                  Tampilkan QR cadangan (tanpa Google Drive)
+                </button>
               </div>
             ) : (
               <>
@@ -117,7 +151,7 @@ export function OrderQrModal({
                   <div className="mb-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-emerald-100 border border-[#3A231E] text-[11px] font-display font-bold text-emerald-900">
                     <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>
-                      Folder GDrive ({order.gdriveUploadedCount || 'Semua'} File: Mentah + 4R)
+                      QR Langsung ke GDrive ({order.gdriveUploadedCount || 'Semua'} File)
                     </span>
                   </div>
                 )}
@@ -127,8 +161,8 @@ export function OrderQrModal({
                   size={200}
                   caption={
                     hasGdriveFolder
-                      ? `Scan QR -> Folder Google Drive ${order.orderCode}`
-                      : `Scan QR Unduh ${order.orderCode}`
+                      ? `Scan QR -> Langsung Buka Google Drive (${order.orderCode})`
+                      : `Scan QR Unduh Cadangan (${order.orderCode})`
                   }
                 />
 
@@ -192,8 +226,20 @@ export function OrderQrModal({
             )}
 
             {!hasGdriveFolder && !isUploadingGdrive && !hasAppsScriptUrl && (
-              <div className="w-full p-2.5 rounded-xl bg-[#EFE2CE] border border-[#3A231E]/60 text-[11px] text-[#61433B] text-left">
-                Web App URL Google Apps Script belum diatur (tab <b>Harga, Paket &amp; Voucher</b>). Saat ini QR memakai tautan unduh lokal sementara.
+              <div className="w-full p-3 rounded-xl bg-amber-50 border border-[#3A231E]/60 text-[11px] text-[#3A231E] text-left space-y-2">
+                <p>
+                  URL Web App Google Apps Script belum dipasang, sehingga QR belum bisa mengarah otomatis ke Google Drive.
+                </p>
+                {onOpenGdriveSettings && (
+                  <button
+                    type="button"
+                    onClick={onOpenGdriveSettings}
+                    className="whoops-btn whoops-btn-secondary whoops-btn-compact px-3 py-1.5 text-[11px] inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <CloudUpload className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Atur Google Drive Sekarang</span>
+                  </button>
+                )}
               </div>
             )}
 

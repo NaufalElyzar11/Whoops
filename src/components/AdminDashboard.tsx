@@ -398,13 +398,27 @@ export function AdminDashboard({
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
+  const effectiveGdriveConfig = useMemo<GoogleDriveConfig>(
+    () => ({
+      webAppUrl: gdriveConfig.webAppUrl.trim() || cloudGDriveConfig?.webAppUrl?.trim() || '',
+      rootFolderId:
+        gdriveConfig.rootFolderId.trim() || cloudGDriveConfig?.rootFolderId?.trim() || '',
+      secretKey: gdriveConfig.secretKey.trim(),
+    }),
+    [gdriveConfig, cloudGDriveConfig]
+  );
+
   useEffect(() => {
-    if (!cloudGDriveConfig?.webAppUrl) return;
+    const cloudUrl = cloudGDriveConfig?.webAppUrl?.trim();
+    if (!cloudUrl) return;
+    const cloudRoot = cloudGDriveConfig?.rootFolderId?.trim() || '';
     setGdriveConfig((prev) => {
-      if (prev.webAppUrl.trim()) return prev;
+      if (prev.webAppUrl.trim() === cloudUrl && prev.rootFolderId.trim() === cloudRoot) {
+        return prev;
+      }
       const merged: GoogleDriveConfig = {
-        webAppUrl: cloudGDriveConfig.webAppUrl,
-        rootFolderId: cloudGDriveConfig.rootFolderId,
+        webAppUrl: cloudUrl,
+        rootFolderId: cloudRoot || prev.rootFolderId,
         secretKey: prev.secretKey,
       };
       saveGDriveConfig(merged);
@@ -679,9 +693,10 @@ export function AdminDashboard({
 
   const triggerUploadOrderToGdrive = async (
     targetOrder: PhotoboothOrder,
-    forceReupload = false
+    forceReupload = false,
+    knownPendingFolderId?: string
   ) => {
-    if (!gdriveConfig.webAppUrl.trim()) return;
+    if (!effectiveGdriveConfig.webAppUrl) return;
 
     setUploadingGdriveOrderId(targetOrder.id);
     setGdriveUploadProgress(null);
@@ -689,7 +704,10 @@ export function AdminDashboard({
     setGdriveUploadWarning(null);
     try {
       let existingFolderId =
-        targetOrder.gdriveFolderId || gdriveLinkMap[targetOrder.id]?.folderId || undefined;
+        knownPendingFolderId ||
+        targetOrder.gdriveFolderId ||
+        gdriveLinkMap[targetOrder.id]?.folderId ||
+        undefined;
 
       // If Booth started uploading in background during package selection, reuse or await it before re-uploading
       if (adminUsingCloud && !forceReupload) {
@@ -701,31 +719,33 @@ export function AdminDashboard({
           return;
         }
 
-        const pendingMeta = await fetchOrderGDrivePending(targetOrder.id);
-        if (pendingMeta?.folderId) {
-          existingFolderId = existingFolderId || pendingMeta.folderId;
-          const completedFromBooth = await new Promise<OrderGDriveLinkInfo | null>((resolve) => {
-            let settled = false;
-            let unsub: (() => void) | undefined;
-            const timer = window.setTimeout(() => {
-              if (settled) return;
-              settled = true;
-              unsub?.();
-              resolve(null);
-            }, 8000);
-            unsub = subscribeOrderGDriveMeta(targetOrder.id, (meta) => {
-              if (!meta || settled) return;
-              settled = true;
-              window.clearTimeout(timer);
-              unsub?.();
-              resolve(meta);
+        if (!knownPendingFolderId) {
+          const pendingMeta = await fetchOrderGDrivePending(targetOrder.id);
+          if (pendingMeta?.folderId) {
+            existingFolderId = existingFolderId || pendingMeta.folderId;
+            const completedFromBooth = await new Promise<OrderGDriveLinkInfo | null>((resolve) => {
+              let settled = false;
+              let unsub: (() => void) | undefined;
+              const timer = window.setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                unsub?.();
+                resolve(null);
+              }, 5000);
+              unsub = subscribeOrderGDriveMeta(targetOrder.id, (meta) => {
+                if (!meta || settled) return;
+                settled = true;
+                window.clearTimeout(timer);
+                unsub?.();
+                resolve(meta);
+              });
             });
-          });
-          if (completedFromBooth?.folderUrl) {
-            applyResolvedGdriveInfo(targetOrder, completedFromBooth);
-            void maybeAutoPurgeOrderCloudMedia(targetOrder, completedFromBooth.folderUrl);
-            showToast(`Folder Google Drive selesai diunggah dari Booth (${targetOrder.orderCode}).`);
-            return;
+            if (completedFromBooth?.folderUrl) {
+              applyResolvedGdriveInfo(targetOrder, completedFromBooth);
+              void maybeAutoPurgeOrderCloudMedia(targetOrder, completedFromBooth.folderUrl);
+              showToast(`Folder Google Drive selesai diunggah dari Booth (${targetOrder.orderCode}).`);
+              return;
+            }
           }
         }
       }
@@ -737,7 +757,7 @@ export function AdminDashboard({
         : composite4RPng;
 
       const uploaded = await uploadOrderToGoogleDrive(
-        gdriveConfig,
+        effectiveGdriveConfig,
         targetOrder,
         effectiveComposite,
         rawPhotos,
@@ -779,6 +799,32 @@ export function AdminDashboard({
     }
   };
 
+  const openOrderQrModal = (order: PhotoboothOrder) => {
+    const cached = gdriveLinkMap[order.id];
+    const enrichedOrder: PhotoboothOrder = cached
+      ? {
+          ...order,
+          gdriveFolderId: order.gdriveFolderId || cached.folderId,
+          gdriveFolderUrl: order.gdriveFolderUrl || cached.folderUrl,
+          gdriveUploadedCount: order.gdriveUploadedCount ?? cached.fileCount,
+        }
+      : order;
+
+    setGdriveUploadError(null);
+    setGdriveUploadWarning(null);
+    setGdriveUploadProgress(null);
+
+    const hasFolder = Boolean(enrichedOrder.gdriveFolderUrl?.trim());
+    if (!hasFolder && effectiveGdriveConfig.webAppUrl) {
+      setUploadingGdriveOrderId(enrichedOrder.id);
+      setActiveQrOrder(enrichedOrder);
+      void triggerUploadOrderToGdrive(enrichedOrder);
+      return;
+    }
+
+    setActiveQrOrder(enrichedOrder);
+  };
+
   const handleVerifyAndOpenQr = async (order: PhotoboothOrder) => {
     try {
       const nextWorkflow: WorkflowStatus = order.includesDoodle
@@ -786,6 +832,78 @@ export function AdminDashboard({
         : order.wantsPrint
           ? 'Ready to Print'
           : 'Ready for Download';
+
+      const cached = gdriveLinkMap[order.id];
+      let resolvedFolderInfo: OrderGDriveLinkInfo | null =
+        order.gdriveFolderUrl
+          ? {
+              folderId: order.gdriveFolderId || cached?.folderId || '',
+              folderUrl: order.gdriveFolderUrl,
+              fileCount: order.gdriveUploadedCount ?? cached?.fileCount ?? 0,
+            }
+          : cached?.folderUrl
+            ? cached
+            : null;
+
+      const verifiedOrder: PhotoboothOrder = {
+        ...order,
+        paymentStatus: 'VERIFIED',
+        workflowStatus: nextWorkflow,
+        ...(resolvedFolderInfo
+          ? {
+              gdriveFolderId: resolvedFolderInfo.folderId,
+              gdriveFolderUrl: resolvedFolderInfo.folderUrl,
+              gdriveUploadedCount: resolvedFolderInfo.fileCount,
+            }
+          : {}),
+      };
+
+      const shouldAutoUploadGdrive = Boolean(
+        !resolvedFolderInfo?.folderUrl && effectiveGdriveConfig.webAppUrl
+      );
+
+      setGdriveUploadError(null);
+      setGdriveUploadWarning(null);
+      setGdriveUploadProgress(null);
+      if (shouldAutoUploadGdrive) {
+        setUploadingGdriveOrderId(verifiedOrder.id);
+      }
+      setActiveQrOrder(verifiedOrder);
+
+      let pendingFolderId: string | undefined;
+      if (adminUsingCloud && !resolvedFolderInfo?.folderUrl) {
+        // Check if Booth already finished or is mid-upload BEFORE flipping status to VERIFIED
+        // (Firestore rules allow Booth to write gdrive_meta while status is PENDING_VERIFICATION)
+        const existingCloudMeta = await fetchOrderGDriveMeta(order.id);
+        if (existingCloudMeta?.folderUrl) {
+          resolvedFolderInfo = existingCloudMeta;
+        } else {
+          const pendingMeta = await fetchOrderGDrivePending(order.id);
+          if (pendingMeta?.folderId) {
+            pendingFolderId = pendingMeta.folderId;
+            const boothDone = await new Promise<OrderGDriveLinkInfo | null>((resolve) => {
+              let settled = false;
+              let unsub: (() => void) | undefined;
+              const timer = window.setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                unsub?.();
+                resolve(null);
+              }, 4500);
+              unsub = subscribeOrderGDriveMeta(order.id, (meta) => {
+                if (!meta || settled) return;
+                settled = true;
+                window.clearTimeout(timer);
+                unsub?.();
+                resolve(meta);
+              });
+            });
+            if (boothDone?.folderUrl) {
+              resolvedFolderInfo = boothDone;
+            }
+          }
+        }
+      }
 
       updateDemoOrder(order.id, {
         paymentStatus: 'VERIFIED',
@@ -796,25 +914,19 @@ export function AdminDashboard({
         await verifyOrderPayment(order);
       }
 
-      const verifiedOrder: PhotoboothOrder = {
-        ...order,
-        paymentStatus: 'VERIFIED',
-        workflowStatus: nextWorkflow,
-      };
-      setGdriveUploadError(null);
-      setGdriveUploadWarning(null);
-      setGdriveUploadProgress(null);
-      setActiveQrOrder(verifiedOrder);
       showToast(`Pesanan ${order.orderCode} terverifikasi.`);
 
-      const existingFolderUrl =
-        verifiedOrder.gdriveFolderUrl || gdriveLinkMap[verifiedOrder.id]?.folderUrl;
-      if (existingFolderUrl) {
-        void maybeAutoPurgeOrderCloudMedia(verifiedOrder, existingFolderUrl);
-      } else if (gdriveConfig.webAppUrl.trim()) {
-        void triggerUploadOrderToGdrive(verifiedOrder);
+      if (resolvedFolderInfo?.folderUrl) {
+        applyResolvedGdriveInfo(verifiedOrder, resolvedFolderInfo);
+        setUploadingGdriveOrderId((cur) => (cur === verifiedOrder.id ? null : cur));
+        void maybeAutoPurgeOrderCloudMedia(verifiedOrder, resolvedFolderInfo.folderUrl);
+      } else if (effectiveGdriveConfig.webAppUrl) {
+        void triggerUploadOrderToGdrive(verifiedOrder, false, pendingFolderId);
+      } else {
+        setUploadingGdriveOrderId((cur) => (cur === verifiedOrder.id ? null : cur));
       }
     } catch {
+      setUploadingGdriveOrderId((cur) => (cur === order.id ? null : cur));
       showToast(`Gagal memverifikasi pesanan ${order.orderCode}.`);
     }
   };
@@ -1468,7 +1580,7 @@ export function AdminDashboard({
             type="button"
             onClick={openGdriveSettingsSection}
             className={`whoops-btn whoops-btn-compact px-2.5 py-1.5 text-[11px] inline-flex items-center gap-1 cursor-pointer whitespace-nowrap ${
-              gdriveConfig.webAppUrl.trim()
+              effectiveGdriveConfig.webAppUrl
                 ? 'bg-emerald-100 text-emerald-900'
                 : 'whoops-btn-ghost'
             }`}
@@ -1476,7 +1588,7 @@ export function AdminDashboard({
           >
             <CloudUpload className="w-3.5 h-3.5" aria-hidden="true" />
             <span>
-              {gdriveConfig.webAppUrl.trim() ? 'GDrive: Aktif' : 'Sambungkan GDrive'}
+              {effectiveGdriveConfig.webAppUrl ? 'GDrive: Aktif' : 'Sambungkan GDrive'}
             </span>
           </button>
 
@@ -2030,12 +2142,7 @@ export function AdminDashboard({
                             </button>
                             <button
                               type="button"
-                              onClick={() => {
-                                setGdriveUploadError(null);
-                                setGdriveUploadWarning(null);
-                                setGdriveUploadProgress(null);
-                                setActiveQrOrder(o);
-                              }}
+                              onClick={() => openOrderQrModal(o)}
                               className="whoops-btn whoops-btn-secondary whoops-btn-compact px-2.5 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
                             >
                               <QrCode className="w-3.5 h-3.5" aria-hidden="true" />
@@ -2197,12 +2304,7 @@ export function AdminDashboard({
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          setGdriveUploadError(null);
-                          setGdriveUploadWarning(null);
-                          setGdriveUploadProgress(null);
-                          setActiveQrOrder(o);
-                        }}
+                        onClick={() => openOrderQrModal(o)}
                         className="whoops-btn whoops-btn-ghost whoops-btn-compact px-3 py-2 text-xs inline-flex items-center justify-center gap-1 cursor-pointer"
                         aria-label={`Tampilkan QR untuk ${o.orderCode}`}
                       >
@@ -3003,12 +3105,12 @@ export function AdminDashboard({
               </div>
               <span
                 className={`px-2.5 py-1 rounded-lg border border-[#3A231E] text-[11px] font-display font-bold ${
-                  gdriveConfig.webAppUrl.trim()
+                  effectiveGdriveConfig.webAppUrl
                     ? 'bg-emerald-100 text-emerald-900'
                     : 'bg-[#EFE2CE] text-[#61433B]'
                 }`}
               >
-                {gdriveConfig.webAppUrl.trim() ? 'URL Terpasang' : 'Belum Diatur'}
+                {effectiveGdriveConfig.webAppUrl ? 'URL Terpasang' : 'Belum Diatur'}
               </span>
             </div>
 
@@ -3255,7 +3357,7 @@ export function AdminDashboard({
 
             const folderId =
               targetOrder.gdriveFolderId || gdriveLinkMap[targetOrder.id]?.folderId;
-            if (gdriveConfig.webAppUrl.trim()) {
+            if (effectiveGdriveConfig.webAppUrl) {
               if (!folderId) {
                 await triggerUploadOrderToGdrive({
                   ...targetOrder,
@@ -3265,7 +3367,7 @@ export function AdminDashboard({
               } else {
                 try {
                   const res = await uploadDoodleToGoogleDrive(
-                    gdriveConfig,
+                    effectiveGdriveConfig,
                     targetOrder,
                     folderId,
                     finalPngDataUrl
@@ -3308,7 +3410,7 @@ export function AdminDashboard({
       {activeQrOrder && (
         <OrderQrModal
           order={activeQrOrder}
-          gdriveConfig={gdriveConfig}
+          gdriveConfig={effectiveGdriveConfig}
           isUploadingGdrive={uploadingGdriveOrderId === activeQrOrder.id}
           gdriveProgress={
             uploadingGdriveOrderId === activeQrOrder.id ? gdriveUploadProgress : null
@@ -3316,6 +3418,10 @@ export function AdminDashboard({
           gdriveError={gdriveUploadError}
           gdriveWarning={gdriveUploadWarning}
           onUploadToGdrive={(ord) => void triggerUploadOrderToGdrive(ord, true)}
+          onOpenGdriveSettings={() => {
+            setActiveQrOrder(null);
+            openGdriveSettingsSection();
+          }}
           onClose={() => setActiveQrOrder(null)}
         />
       )}
