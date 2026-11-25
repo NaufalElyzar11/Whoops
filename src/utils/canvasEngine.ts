@@ -289,6 +289,50 @@ function drawCoverImage(
   }
 }
 
+/**
+ * Encodes a flattened 4R (1205x1795) studio composite as high-quality JPEG (95%+)
+ * so 300 DPI print sharpness stays intact while remaining ~6-10x smaller than lossless PNG
+ * and always fitting comfortably within Firestore's 20-chunk limit and Apps Script payloads.
+ */
+export function encodeComposite4RHighRes(
+  canvas: HTMLCanvasElement,
+  maxDataUrlLen = 6_500_000
+): string {
+  const qualities = [0.95, 0.92, 0.88, 0.82];
+  for (const q of qualities) {
+    const candidate = canvas.toDataURL('image/jpeg', q);
+    if (candidate.length <= maxDataUrlLen) {
+      return candidate;
+    }
+  }
+  return canvas.toDataURL('image/jpeg', 0.8);
+}
+
+/**
+ * Ensures any 4R composite Data URL fits within Firestore's chunk ceiling at full resolution
+ * instead of ever dropping to the tiny 260x387 preview thumbnail.
+ */
+export async function fitCompositeDataUrlUnderLimit(
+  dataUrl: string,
+  maxChars = 7_400_000
+): Promise<string> {
+  if (!dataUrl || dataUrl.length <= maxChars) return dataUrl;
+  try {
+    const img = await loadImage(dataUrl);
+    const c = document.createElement('canvas');
+    c.width = img.width || CANVAS_4R_WIDTH;
+    c.height = img.height || CANVAS_4R_HEIGHT;
+    const ctx = c.getContext('2d');
+    if (!ctx) return dataUrl;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    return encodeComposite4RHighRes(c, maxChars);
+  } catch {
+    return dataUrl;
+  }
+}
+
 export function createThumbnailFromCanvas(sourceCanvas: HTMLCanvasElement): string {
   const thumb = document.createElement('canvas');
   thumb.width = 260;
@@ -387,7 +431,7 @@ export async function buildComposite4R(
     await drawFrameArtwork();
   }
 
-  const fullPngDataUrl = canvas.toDataURL('image/png');
+  const fullPngDataUrl = encodeComposite4RHighRes(canvas);
   const previewThumbUrl = createThumbnailFromCanvas(canvas);
   return { fullPngDataUrl, previewThumbUrl };
 }
@@ -403,6 +447,9 @@ export async function compositeDoodleOntoOriginal(
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D context unavailable');
 
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
   const baseImg = await loadImage(originalDataUrl);
   ctx.drawImage(baseImg, 0, 0, canvas.width, canvas.height);
 
@@ -417,7 +464,7 @@ export async function compositeDoodleOntoOriginal(
   }
 
   return {
-    fullPngDataUrl: canvas.toDataURL('image/png'),
+    fullPngDataUrl: encodeComposite4RHighRes(canvas),
     previewThumbUrl: createThumbnailFromCanvas(canvas),
   };
 }

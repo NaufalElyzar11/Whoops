@@ -30,7 +30,11 @@ import type {
   StoreSettings,
   WorkflowStatus,
 } from '../types';
-import { chunkDataUrl, fitJpegDataUrlUnderLimit } from '../utils/canvasEngine';
+import {
+  chunkDataUrl,
+  fitCompositeDataUrlUnderLimit,
+  fitJpegDataUrlUnderLimit,
+} from '../utils/canvasEngine';
 import {
   decodeFrameFromFirestore,
   encodeFrameForFirestore,
@@ -379,9 +383,12 @@ export async function createPhotoboothOrder(input: CreateOrderInput): Promise<st
     input.orderCode || `WHP-${Math.floor(1000 + Math.random() * 9000)}`;
   const sanitizedNotes = input.doodleNotes.trim().slice(0, 300);
 
-  let chunks = chunkDataUrl(input.fullPngDataUrl, 380000);
+  const fittedComposite = await fitCompositeDataUrlUnderLimit(
+    input.fullPngDataUrl,
+    20 * 380000 - 20000
+  );
+  let chunks = chunkDataUrl(fittedComposite, 380000);
   if (chunks.length > 20) {
-    // Fallback to compact preview if extremely dense PNG exceeds 20 chunks (~7.6MB)
     chunks = chunkDataUrl(input.previewThumbUrl, 380000);
   }
 
@@ -689,7 +696,11 @@ export async function saveOrderDoodleResult(
   previewThumbUrl: string
 ): Promise<void> {
   const orderPath = `orders/${order.id}`;
-  let chunks = chunkDataUrl(finalPngDataUrl, 380000);
+  const fittedFinal = await fitCompositeDataUrlUnderLimit(
+    finalPngDataUrl,
+    20 * 380000 - 20000
+  );
+  let chunks = chunkDataUrl(fittedFinal, 380000);
   if (chunks.length > 20) {
     chunks = chunkDataUrl(previewThumbUrl, 380000);
   }

@@ -185,8 +185,9 @@ export async function uploadOrderToGoogleDrive(
   if (composite4RPng) {
     const parsed = parseDataUrlParts(composite4RPng);
     if (parsed) {
+      const ext = parsed.mimeType.includes('png') ? 'png' : 'jpg';
       files.push({
-        filename: `WHOOPS-${order.orderCode}-4R-300DPI.png`,
+        filename: `WHOOPS-${order.orderCode}-4R-300DPI.${ext}`,
         mimeType: parsed.mimeType,
         base64: parsed.base64,
       });
@@ -269,6 +270,7 @@ export async function uploadDoodleToGoogleDrive(
     throw new Error('Gambar hasil doodle tidak valid.');
   }
 
+  const ext = parsed.mimeType.includes('png') ? 'png' : 'jpg';
   const res = await postAppsScript(config.webAppUrl, {
     action: 'add_doodle',
     secret: config.secretKey.trim(),
@@ -278,7 +280,7 @@ export async function uploadDoodleToGoogleDrive(
     replaceExisting: true,
     files: [
       {
-        filename: `WHOOPS-${order.orderCode}-DOODLE-4R-300DPI.png`,
+        filename: `WHOOPS-${order.orderCode}-DOODLE-4R-300DPI.${ext}`,
         mimeType: parsed.mimeType,
         base64: parsed.base64,
       },

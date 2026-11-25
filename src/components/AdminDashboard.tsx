@@ -556,8 +556,10 @@ export function AdminDashboard({
       const bytes = dataUrlToUint8Array(resolvedUrl);
       if (bytes) {
         const mimeMatch = resolvedUrl.match(/^data:([^;]+);base64,/i);
-        const mime = mimeMatch?.[1] || 'image/png';
-        triggerBlobDownload(new Blob([bytes.buffer as ArrayBuffer], { type: mime }), filename);
+        const mime = mimeMatch?.[1] || 'image/jpeg';
+        const ext = mime.includes('png') ? 'png' : 'jpg';
+        const matchedFilename = filename.replace(/\.(png|jpe?g)$/i, `.${ext}`);
+        triggerBlobDownload(new Blob([bytes.buffer as ArrayBuffer], { type: mime }), matchedFilename);
       } else {
         const a = document.createElement('a');
         a.href = resolvedUrl;
@@ -2010,6 +2012,22 @@ export function AdminDashboard({
                                 <span>GDrive</span>
                               </a>
                             )}
+                            <button
+                              type="button"
+                              disabled={downloadingOrderId === o.id}
+                              onClick={() =>
+                                void handleDownloadHighRes(
+                                  o,
+                                  o.doodleDone && o.finalChunks > 0 ? 'final' : 'original',
+                                  `WHOOPS-${o.orderCode}-4R-300DPI.jpg`
+                                )
+                              }
+                              className="whoops-btn whoops-btn-ghost whoops-btn-compact px-2.5 py-1 text-[11px] inline-flex items-center gap-1 cursor-pointer"
+                              title="Unduh file 4R resolusi tinggi"
+                            >
+                              <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span>4R</span>
+                            </button>
                             <button
                               type="button"
                               onClick={() => {

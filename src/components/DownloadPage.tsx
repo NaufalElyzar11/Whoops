@@ -185,11 +185,11 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
                   ) : fullImageUrl ? (
                     <a
                       href={fullImageUrl}
-                      download={`WHOOPS-${order.orderCode}-4R-300DPI.png`}
+                      download={`WHOOPS-${order.orderCode}-4R-300DPI.${fullImageUrl.startsWith('data:image/png') ? 'png' : 'jpg'}`}
                       className="whoops-btn whoops-btn-primary w-full py-3.5 text-base inline-flex items-center justify-center gap-2"
                     >
                       <Download className="w-5 h-5" />
-                      Unduh Foto 4R (300 DPI PNG)
+                      Unduh Foto 4R (300 DPI HD)
                     </a>
                   ) : null}
                 </>
