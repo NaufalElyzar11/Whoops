@@ -63,7 +63,7 @@ import {
   deletePackage,
   fetchOrderGDriveMeta,
   fetchOrderGDrivePending,
-  fetchOrderMediaDataUrl,
+  fetchOrderMediaWithRetry,
   fetchOrderRawPhotos,
   fetchOrdersByDateRange,
   isOrderReadyForCloudMediaPurge,
@@ -559,30 +559,33 @@ export function AdminDashboard({
       }
       if (!dataUrl && adminUsingCloud) {
         const count = kind === 'final' ? order.finalChunks : order.originalChunks;
-        dataUrl = await fetchOrderMediaDataUrl(order.id, kind, count);
+        dataUrl = await fetchOrderMediaWithRetry(order.id, kind, count, 4, 800);
       }
-      const resolvedUrl = dataUrl || order.previewThumbUrl;
-      if (!resolvedUrl) {
-        showToast(`File foto untuk ${order.orderCode} belum tersedia.`);
+      if (!dataUrl) {
+        showToast(
+          order.gdriveFolderUrl
+            ? `File 4R HD ${order.orderCode} sudah tersimpan di Google Drive. Klik tombol GDrive untuk mengunduh versi HD.`
+            : `File 4R HD ${order.orderCode} belum selesai masuk ke server. Tunggu beberapa detik lalu coba lagi.`
+        );
         return;
       }
 
-      const bytes = dataUrlToUint8Array(resolvedUrl);
+      const bytes = dataUrlToUint8Array(dataUrl);
       if (bytes) {
-        const mimeMatch = resolvedUrl.match(/^data:([^;]+);base64,/i);
+        const mimeMatch = dataUrl.match(/^data:([^;]+);base64,/i);
         const mime = mimeMatch?.[1] || 'image/jpeg';
         const ext = mime.includes('png') ? 'png' : 'jpg';
         const matchedFilename = filename.replace(/\.(png|jpe?g)$/i, `.${ext}`);
         triggerBlobDownload(new Blob([bytes.buffer as ArrayBuffer], { type: mime }), matchedFilename);
       } else {
         const a = document.createElement('a');
-        a.href = resolvedUrl;
+        a.href = dataUrl;
         a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
       }
-      showToast(`Foto 4R ${order.orderCode} berhasil diunduh.`);
+      showToast(`Foto 4R HD ${order.orderCode} berhasil diunduh.`);
     } finally {
       setDownloadingOrderId(null);
     }
@@ -602,17 +605,21 @@ export function AdminDashboard({
 
     if (adminUsingCloud) {
       if (!composite4RPng && targetOrder.originalChunks > 0) {
-        composite4RPng = await fetchOrderMediaDataUrl(
+        composite4RPng = await fetchOrderMediaWithRetry(
           targetOrder.id,
           'original',
-          targetOrder.originalChunks
+          targetOrder.originalChunks,
+          6,
+          900
         );
       }
       if (!doodle4RPng && targetOrder.doodleDone && targetOrder.finalChunks > 0) {
-        doodle4RPng = await fetchOrderMediaDataUrl(
+        doodle4RPng = await fetchOrderMediaWithRetry(
           targetOrder.id,
           'final',
-          targetOrder.finalChunks
+          targetOrder.finalChunks,
+          4,
+          800
         );
       }
       if (rawPhotos.length === 0) {
@@ -620,18 +627,18 @@ export function AdminDashboard({
       }
     }
 
-    if (!composite4RPng && !doodle4RPng) {
-      composite4RPng = targetOrder.previewThumbUrl || null;
-    }
-
+    // Never fall back to previewThumbUrl (260x387) when uploading or exporting 4R HD files
     return { composite4RPng, doodle4RPng, rawPhotos };
   };
 
+  // Keep HD chunks in Firestore until admin explicitly runs "Bersihkan Cache Cloud"
+  // (immediate auto-purge after verify caused re-uploads/downloads to lose HD chunks)
   const maybeAutoPurgeOrderCloudMedia = async (
     targetOrder: PhotoboothOrder,
     resolvedGdriveUrl?: string
   ) => {
     if (!adminUsingCloud) return;
+    if (targetOrder.paymentStatus !== 'REJECTED') return;
     if (!isOrderReadyForCloudMediaPurge(targetOrder, resolvedGdriveUrl)) return;
     await purgeOrderCloudMedia(targetOrder.id);
   };
@@ -755,6 +762,17 @@ export function AdminDashboard({
       const effectiveComposite = targetOrder.doodleDone
         ? doodle4RPng || composite4RPng
         : composite4RPng;
+
+      if (!effectiveComposite) {
+        if (targetOrder.gdriveFolderUrl) {
+          throw new Error(
+            'File 4R HD tidak ditemukan di cache Firestore (mungkin sudah dibersihkan). Folder Google Drive tetap aman dan tidak ditimpa thumbnail.'
+          );
+        }
+        throw new Error(
+          'File 4R HD belum selesai masuk dari Booth ke server. Tunggu 3 detik lalu tekan Coba Upload ke GDrive.'
+        );
+      }
 
       const uploaded = await uploadOrderToGoogleDrive(
         effectiveGdriveConfig,
@@ -902,6 +920,12 @@ export function AdminDashboard({
               resolvedFolderInfo = boothDone;
             }
           }
+        }
+
+        // Wait until Booth finishes uploading all HD original_* chunks BEFORE flipping status to VERIFIED
+        // so Firestore rules do not prematurely reject in-flight Booth media chunk writes.
+        if (!resolvedFolderInfo?.folderUrl && order.originalChunks > 0) {
+          await fetchOrderMediaWithRetry(order.id, 'original', order.originalChunks, 6, 850);
         }
       }
 

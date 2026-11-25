@@ -387,9 +387,12 @@ export async function createPhotoboothOrder(input: CreateOrderInput): Promise<st
     input.fullPngDataUrl,
     20 * 380000 - 20000
   );
-  let chunks = chunkDataUrl(fittedComposite, 380000);
+  const chunks = chunkDataUrl(fittedComposite, 380000);
   if (chunks.length > 20) {
-    chunks = chunkDataUrl(input.previewThumbUrl, 380000);
+    throw new CloudOrderSyncError(
+      'unknown',
+      'Ukuran file foto 4R melebihi batas server. Coba ulangi proses simpan dari halaman Preview.'
+    );
   }
 
   input.onProgress?.('Mendaftarkan pesanan ke meja kasir...');
@@ -539,6 +542,28 @@ export async function fetchOrderMediaDataUrl(
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
   }
+}
+
+export async function fetchOrderMediaWithRetry(
+  orderId: string,
+  kind: 'original' | 'final',
+  chunkCount: number,
+  maxAttempts = 6,
+  delayMs = 900
+): Promise<string | null> {
+  if (chunkCount <= 0) return null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const dataUrl = await fetchOrderMediaDataUrl(orderId, kind, chunkCount);
+      if (dataUrl) return dataUrl;
+    } catch {
+      // Retry transiently if chunks are still arriving
+    }
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
+  }
+  return null;
 }
 
 const GDRIVE_META_DOC_ID = 'gdrive_meta';
@@ -700,9 +725,9 @@ export async function saveOrderDoodleResult(
     finalPngDataUrl,
     20 * 380000 - 20000
   );
-  let chunks = chunkDataUrl(fittedFinal, 380000);
+  const chunks = chunkDataUrl(fittedFinal, 380000);
   if (chunks.length > 20) {
-    chunks = chunkDataUrl(previewThumbUrl, 380000);
+    throw new Error('Ukuran file hasil doodle melebihi batas penyimpanan server.');
   }
 
   try {

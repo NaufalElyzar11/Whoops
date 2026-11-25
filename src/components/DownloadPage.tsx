@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, Download, ExternalLink, Loader2, Sparkles } from 'lucide-react';
 import { getOrderGDriveLinkMap, type OrderGDriveLinkInfo } from '../services/demoStore';
 import {
-  fetchOrderMediaDataUrl,
+  fetchOrderMediaWithRetry,
   subscribeOrderGDriveMeta,
   subscribeSingleOrder,
 } from '../services/firestoreService';
@@ -68,17 +68,17 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
     const chunkCount = kind === 'final' ? order.finalChunks : order.originalChunks;
 
     if (chunkCount <= 0) {
-      setFullImageUrl(order.previewThumbUrl || null);
+      setFullImageUrl(null);
       return;
     }
 
     setLoadingImage(true);
-    fetchOrderMediaDataUrl(order.id, kind, chunkCount)
+    fetchOrderMediaWithRetry(order.id, kind, chunkCount, 4, 800)
       .then((url) => {
-        if (!cancelled) setFullImageUrl(url || order.previewThumbUrl || null);
+        if (!cancelled) setFullImageUrl(url || null);
       })
       .catch(() => {
-        if (!cancelled) setFullImageUrl(order.previewThumbUrl || null);
+        if (!cancelled) setFullImageUrl(null);
       })
       .finally(() => {
         if (!cancelled) setLoadingImage(false);
@@ -163,9 +163,9 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
                         <Loader2 className="w-6 h-6 animate-spin text-[#6D1D3A]" />
                         <span>Menyiapkan file 300 DPI...</span>
                       </div>
-                    ) : fullImageUrl ? (
+                    ) : fullImageUrl || order.previewThumbUrl ? (
                       <img
-                        src={fullImageUrl}
+                        src={fullImageUrl || order.previewThumbUrl}
                         alt={`WHOOPS ${order.orderCode}`}
                         className="w-full h-full object-contain"
                       />
@@ -191,6 +191,10 @@ export function DownloadPage({ orderId, onExitDownload }: DownloadPageProps) {
                       <Download className="w-5 h-5" />
                       Unduh Foto 4R (300 DPI HD)
                     </a>
+                  ) : !loadingImage ? (
+                    <div className="p-3.5 rounded-xl bg-amber-50 border border-[#3A231E]/50 text-xs text-[#3A231E]">
+                      File 4R HD sedang disiapkan ke Google Drive. Minta penjaga kasir membuka QR Google Drive terbaru atau muat ulang halaman ini sebentar lagi.
+                    </div>
                   ) : null}
                 </>
               )}

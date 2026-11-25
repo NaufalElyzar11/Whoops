@@ -16,7 +16,7 @@ import {
   updateDemoOrderDoodleMedia,
 } from '../services/demoStore';
 import {
-  fetchOrderMediaDataUrl,
+  fetchOrderMediaWithRetry,
   saveOrderDoodleResult,
 } from '../services/firestoreService';
 import type { PhotoboothOrder } from '../types';
@@ -96,9 +96,9 @@ export function DoodleStudioModal({
           return;
         }
         if (useCloud) {
-          const url = await fetchOrderMediaDataUrl(order.id, 'original', order.originalChunks);
-          if (!cancelled) {
-            setOriginalUrl(url || order.previewThumbUrl || null);
+          const url = await fetchOrderMediaWithRetry(order.id, 'original', order.originalChunks, 5, 850);
+          if (!cancelled && url) {
+            setOriginalUrl(url);
             return;
           }
         }
